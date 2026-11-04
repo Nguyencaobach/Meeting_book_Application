@@ -1,0 +1,13 @@
+# Bỏ qua tất cả các file và thư mục ở thư mục gốc
+/*
+
+# Chỉ giữ lại và đẩy lên Git các mục sau:
+# 1. Chính file .gitignore này
+!.gitignore
+
+# 2. Các file tài liệu Markdown (.md) như System.md, README.md
+!*.md
+
+# 3. Thư mục lib/ và toàn bộ các thư mục, file code bên trong
+!/lib/
+!/lib/**
