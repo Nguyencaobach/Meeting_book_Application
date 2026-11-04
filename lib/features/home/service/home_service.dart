@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../../../core/constants/app_colors.dart';
 import '../../../data/datasources/google_drive_datasource.dart';
 import '../../../widgets/create_folder_dialog.dart';
 import '../../../widgets/user_profile_dialog.dart';
@@ -84,25 +83,10 @@ class HomeService {
       context: context,
       currentTabIndex: currentTabIndex,
       onConfirmCreate: (folderName) async {
-        final createdFolder = await _driveDatasource.createFolderInTab(
+        await _driveDatasource.createFolderInTab(
           tabIndex: currentTabIndex,
           folderName: folderName,
         );
-
-        if (context.mounted) {
-          final String parentPath = currentTabIndex == 0
-              ? 'MeetingBook/Ghi_Chu'
-              : 'MeetingBook/So_Du_Gio';
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              backgroundColor: AppColors.primaryBlue,
-              content: Text(
-                'Đã tạo thư mục "${createdFolder.name}" trong $parentPath',
-                style: const TextStyle(color: AppColors.basicWhite),
-              ),
-            ),
-          );
-        }
       },
     );
   }

@@ -4,6 +4,7 @@ import 'core/theme/app_theme.dart';
 import 'features/auth/service/auth_service.dart';
 import 'features/auth/views/login_screen.dart';
 import 'features/home/views/home_screen.dart';
+import 'widgets/network_lock_overlay_widget.dart';
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -14,6 +15,12 @@ class MyApp extends StatelessWidget {
       title: 'Meeting Book Application',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
+      // Bọc lớp kiểm tra mạng toàn cục: Hễ mất mạng là hiện thông báo giữa màn hình và khóa mọi thao tác
+      builder: (context, child) {
+        return NetworkLockOverlayWidget(
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
       home: const AuthGateScreen(),
     );
   }

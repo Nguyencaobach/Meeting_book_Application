@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
 import '../core/constants/app_colors.dart';
 import '../core/theme/app_theme.dart';
+import '../data/datasources/google_drive_datasource.dart';
+import 'center_notification_dialog.dart';
 
 // ===========================================================================
 // HỘP THOẠI NHẬP TÊN THƯ MỤC MỚI & TẠO TRÊN GOOGLE DRIVE
 // Công dụng:
 // - Hiển thị form nhập tên thư mục rộng rãi, tự co giãn theo kích thước màn hình.
 // - Không sử dụng icon trang trí theo yêu cầu, chỉ giữ chữ và ô nhập tối giản.
-// - Kiểm tra tên thư mục không được để trống ngay trong ô nhập.
-// - Gọi hàm tạo thư mục vào đúng nhánh MeetingBook/Ghi_Chu hoặc MeetingBook/So_Du_Gio.
+// - Kiểm tra tên thư mục không được để trống và CHỐNG TRÙNG TÊN ngay trong ô nhập.
 // ===========================================================================
 Future<void> showCreateFolderDialog({
   required BuildContext context,
@@ -21,7 +22,7 @@ Future<void> showCreateFolderDialog({
       currentTabIndex == 0 ? 'MeetingBook / Ghi_Chu' : 'MeetingBook / So_Du_Gio';
 
   bool isCreating = false;
-  String? errorMessage;
+  String? duplicateOrServerError;
 
   await showDialog(
     context: context,
@@ -47,7 +48,7 @@ Future<void> showCreateFolderDialog({
       return StatefulBuilder(
         builder: (context, setDialogState) {
           Future<void> submit() async {
-            setDialogState(() => errorMessage = null);
+            setDialogState(() => duplicateOrServerError = null);
             if (!(formKey.currentState?.validate() ?? false)) {
               return;
             }
@@ -58,12 +59,28 @@ Future<void> showCreateFolderDialog({
               if (dialogContext.mounted) {
                 Navigator.of(dialogContext).pop();
               }
-            } catch (e) {
+              if (context.mounted) {
+                await showCenterNotification(
+                  context: context,
+                  title: 'Tạo mới thành công',
+                  message:
+                      'Đã tạo thư mục "${folderNameController.text.trim()}" thành công!',
+                );
+              }
+            } on DuplicateDriveItemException catch (e) {
+              // Nếu trùng tên thư mục -> Hiển thị lỗi trực tiếp ngay trong ô nhập
               setDialogState(() {
                 isCreating = false;
-                errorMessage =
+                duplicateOrServerError = e.message;
+              });
+              formKey.currentState?.validate();
+            } catch (_) {
+              setDialogState(() {
+                isCreating = false;
+                duplicateOrServerError =
                     'Không thể tạo thư mục trên Google Drive. Vui lòng kiểm tra kết nối mạng.';
               });
+              formKey.currentState?.validate();
             }
           }
 
@@ -87,7 +104,7 @@ Future<void> showCreateFolderDialog({
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Hàng tiêu đề (Đã bỏ toàn bộ icon theo yêu cầu)
+                      // Hàng tiêu đề (Không dùng icon)
                       Row(
                         children: [
                           Expanded(
@@ -117,7 +134,7 @@ Future<void> showCreateFolderDialog({
                       ),
                       SizedBox(height: verticalPadding * 0.4),
 
-                      // Hiển thị đường dẫn nơi thư mục sẽ được lưu trên Google Drive (Không dùng icon)
+                      // Hiển thị đường dẫn nơi thư mục sẽ được lưu trên Google Drive
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(
@@ -139,20 +156,33 @@ Future<void> showCreateFolderDialog({
                       ),
                       SizedBox(height: verticalPadding * 0.7),
 
-                      // Ô nhập tên thư mục (Không dùng icon)
+                      // Ô nhập tên thư mục (Giới hạn tối đa 150 ký tự, kiểm tra trống & báo lỗi trùng tên trực tiếp dưới ô nhập)
                       TextFormField(
                         controller: folderNameController,
                         autofocus: true,
                         enabled: !isCreating,
+                        maxLength: 150, // Giới hạn tối đa 150 ký tự khi nhập tên
                         textInputAction: TextInputAction.done,
                         onFieldSubmitted: (_) => submit(),
+                        onChanged: (_) {
+                          if (duplicateOrServerError != null) {
+                            setDialogState(() => duplicateOrServerError = null);
+                            formKey.currentState?.validate();
+                          }
+                        },
                         style: TextStyle(
                           color: AppColors.basicBlack,
                           fontSize: inputFontSize,
                         ),
                         validator: (value) {
+                          if (duplicateOrServerError != null) {
+                            return duplicateOrServerError;
+                          }
                           if (value == null || value.trim().isEmpty) {
                             return 'Vui lòng nhập tên thư mục';
+                          }
+                          if (value.trim().length > 150) {
+                            return 'Tên thư mục tối đa 150 ký tự';
                           }
                           return null;
                         },
@@ -166,6 +196,12 @@ Future<void> showCreateFolderDialog({
                             fontSize: inputFontSize,
                             fontWeight: FontWeight.w600,
                           ),
+                          errorStyle: TextStyle(
+                            color: AppColors.paperMarginRed,
+                            fontSize: subFontSize,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          errorMaxLines: 2,
                           filled: true,
                           fillColor:
                               AppColors.creamBackground.withValues(alpha: 0.4),
@@ -202,18 +238,6 @@ Future<void> showCreateFolderDialog({
                           ),
                         ),
                       ),
-
-                      if (errorMessage != null) ...[
-                        const SizedBox(height: 14),
-                        Text(
-                          errorMessage!,
-                          style: TextStyle(
-                            color: AppColors.paperMarginRed,
-                            fontSize: subFontSize,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
 
                       SizedBox(height: verticalPadding * 0.9),
 

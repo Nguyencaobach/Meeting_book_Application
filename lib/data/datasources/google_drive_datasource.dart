@@ -5,6 +5,15 @@ import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+/// Ngoại lệ chuyên biệt khi phát hiện trùng tên Thư mục hoặc trùng tên File
+class DuplicateDriveItemException implements Exception {
+  final String message;
+  const DuplicateDriveItemException(this.message);
+
+  @override
+  String toString() => message;
+}
+
 /// Model đại diện cho một Thư mục trên Google Drive
 class DriveFolderItem {
   final String id;
@@ -47,6 +56,9 @@ class GoogleDriveDatasource {
   static const String _keyUserEmail = 'user_email';
   static const String _keyUserDisplayName = 'user_display_name';
   static const String _keyUserPhotoUrl = 'user_photo_url';
+  static const String _keyRootFolderId = 'drive_root_folder_id';
+  static const String _keyNotesFolderId = 'drive_notes_folder_id';
+  static const String _keyObservationFolderId = 'drive_observation_folder_id';
 
   static const String _folderMimeType = 'application/vnd.google-apps.folder';
   static const String _jsonMimeType = 'application/json';
@@ -71,7 +83,7 @@ class GoogleDriveDatasource {
   String? _notesTabFolderId;
   String? _observationTabFolderId;
 
-  // Danh sách thông báo cập nhật giao diện khi có thư mục mới được tạo
+  // Danh sách thông báo cập nhật giao diện khi có thư mục mới được tạo hoặc làm mới
   final ValueNotifier<List<DriveFolderItem>> notesFoldersNotifier =
       ValueNotifier<List<DriveFolderItem>>([]);
   final ValueNotifier<List<DriveFolderItem>> observationFoldersNotifier =
@@ -162,13 +174,14 @@ class GoogleDriveDatasource {
     await refreshAllTabFolders();
   }
 
-  /// Đảm bảo `_driveApi` đã sẵn sàng (nếu vừa mở lại app mà phiên ngầm chưa nối xong thì nối lại)
+  /// Đảm bảo `_driveApi` đã sẵn sàng
   Future<drive.DriveApi> _requireDriveApi() async {
     if (_driveApi != null) {
       return _driveApi!;
     }
-    final GoogleSignInAccount? account =
-        _currentUser ?? await _googleSignIn.signInSilently() ?? await _googleSignIn.signIn();
+    final GoogleSignInAccount? account = _currentUser ??
+        await _googleSignIn.signInSilently() ??
+        await _googleSignIn.signIn();
     if (account == null) {
       throw Exception('Chưa đăng nhập tài khoản Google Drive.');
     }
@@ -185,6 +198,18 @@ class GoogleDriveDatasource {
   // └── So_Du_Gio/
   // ===========================================================================
   Future<void> ensureAppFolderStructure() async {
+    final prefs = await SharedPreferences.getInstance();
+    _rootMeetingBookFolderId ??= prefs.getString(_keyRootFolderId);
+    _notesTabFolderId ??= prefs.getString(_keyNotesFolderId);
+    _observationTabFolderId ??= prefs.getString(_keyObservationFolderId);
+
+    // Nếu cả 3 ID thư mục gốc đã có sẵn trong bộ nhớ đệm -> Tốn 0 lượt gọi API!
+    if (_rootMeetingBookFolderId != null &&
+        _notesTabFolderId != null &&
+        _observationTabFolderId != null) {
+      return;
+    }
+
     final api = await _requireDriveApi();
 
     // Bước 1: Tìm hoặc tạo thư mục gốc "MeetingBook"
@@ -206,6 +231,11 @@ class GoogleDriveDatasource {
       folderName: observationTabFolderName,
       parentId: _rootMeetingBookFolderId,
     );
+
+    // Lưu ID vào bộ nhớ máy để những lần sau không phải gọi API tìm lại nữa
+    await prefs.setString(_keyRootFolderId, _rootMeetingBookFolderId!);
+    await prefs.setString(_keyNotesFolderId, _notesTabFolderId!);
+    await prefs.setString(_keyObservationFolderId, _observationTabFolderId!);
   }
 
   /// Hàm tìm một thư mục trên Google Drive theo tên và thư mục cha; nếu chưa có thì tạo mới
@@ -246,7 +276,48 @@ class GoogleDriveDatasource {
   }
 
   // ===========================================================================
-  // 5. HÀM TẠO THƯ MỤC MỚI THEO TAB ("Ghi_Chu" HOẶC "So_Du_Gio")
+  // 5. HÀM KIỂM TRA CHỐNG TRÙNG TÊN THƯ MỤC & TRÙNG TÊN FILE KHI TẠO MỚI
+  // Công dụng:
+  // - Kiểm tra cả trên danh sách hiện tại và truy vấn trực tiếp trên Google Drive
+  //   (không phân biệt chữ hoa/thường) để đảm bảo không tạo trùng tên.
+  // ===========================================================================
+  Future<bool> isItemNameDuplicate({
+    required String parentFolderId,
+    required String itemName,
+    required bool isFolder,
+  }) async {
+    final api = await _requireDriveApi();
+    final String trimmedName = itemName.trim();
+    final String lowerTarget = trimmedName.toLowerCase();
+
+    final String mimeCondition = isFolder
+        ? "mimeType = '$_folderMimeType'"
+        : "mimeType != '$_folderMimeType'";
+    final String query =
+        "$mimeCondition and '$parentFolderId' in parents and trashed = false";
+
+    final drive.FileList fileList = await api.files.list(
+      q: query,
+      spaces: 'drive',
+      $fields: 'files(id, name)',
+    );
+
+    final files = fileList.files ?? <drive.File>[];
+    for (final file in files) {
+      final String existingName = (file.name ?? '').trim();
+      final String existingWithoutJson = existingName.endsWith('.json')
+          ? existingName.substring(0, existingName.length - 5)
+          : existingName;
+      if (existingName.toLowerCase() == lowerTarget ||
+          existingWithoutJson.toLowerCase() == lowerTarget) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // ===========================================================================
+  // 6. HÀM TẠO THƯ MỤC MỚI THEO TAB (CÓ KIỂM TRA CHỐNG TRÙNG TÊN THƯ MỤC)
   // ===========================================================================
   Future<DriveFolderItem> createFolderInTab({
     required int tabIndex,
@@ -255,11 +326,37 @@ class GoogleDriveDatasource {
     final api = await _requireDriveApi();
     await ensureAppFolderStructure();
 
+    final String trimmedName = folderName.trim();
     final String targetParentId =
         tabIndex == 0 ? _notesTabFolderId! : _observationTabFolderId!;
 
+    // Bước 1: Kiểm tra nhanh ngay trên danh sách RAM đang hiển thị (Tốn 0 lượt gọi API)
+    final currentRamList = tabIndex == 0
+        ? notesFoldersNotifier.value
+        : observationFoldersNotifier.value;
+    final bool existsInRam = currentRamList.any(
+      (f) => f.name.trim().toLowerCase() == trimmedName.toLowerCase(),
+    );
+    if (existsInRam) {
+      throw DuplicateDriveItemException(
+        'Tên thư mục "$trimmedName" đã tồn tại! Vui lòng đặt tên khác.',
+      );
+    }
+
+    // Bước 2: Kiểm tra trên Google Drive phòng trường hợp tạo từ thiết bị khác
+    final bool isDuplicate = await isItemNameDuplicate(
+      parentFolderId: targetParentId,
+      itemName: trimmedName,
+      isFolder: true,
+    );
+    if (isDuplicate) {
+      throw DuplicateDriveItemException(
+        'Tên thư mục "$trimmedName" đã tồn tại! Vui lòng đặt tên khác.',
+      );
+    }
+
     final drive.File folderMetadata = drive.File()
-      ..name = folderName.trim()
+      ..name = trimmedName
       ..mimeType = _folderMimeType
       ..parents = <String>[targetParentId];
 
@@ -270,7 +367,7 @@ class GoogleDriveDatasource {
 
     final newItem = DriveFolderItem(
       id: created.id ?? '',
-      name: created.name ?? folderName.trim(),
+      name: created.name ?? trimmedName,
       createdTime: created.createdTime ?? DateTime.now(),
     );
 
@@ -291,9 +388,67 @@ class GoogleDriveDatasource {
   }
 
   // ===========================================================================
-  // 6. HÀM ĐÓNG GÓI & GHI ĐÈ FILE JSON LÊN GOOGLE DRIVE
-  // - Nếu file đã tồn tại trên Drive -> Ghi đè nội dung mới (files.update).
-  // - Nếu file chưa tồn tại -> Tạo mới file .json trong thư mục đích (files.create).
+  // HÀM CẬP NHẬT TÊN THƯ MỤC (ĐỔI TÊN) & XÓA THƯ MỤC TRÊN GOOGLE DRIVE
+  // ===========================================================================
+  Future<void> renameFolderInTab({
+    required int tabIndex,
+    required String folderId,
+    required String newFolderName,
+  }) async {
+    final api = await _requireDriveApi();
+    await ensureAppFolderStructure();
+
+    final String trimmedName = newFolderName.trim();
+    final String targetParentId =
+        tabIndex == 0 ? _notesTabFolderId! : _observationTabFolderId!;
+
+    final bool isDuplicate = await isItemNameDuplicate(
+      parentFolderId: targetParentId,
+      itemName: trimmedName,
+      isFolder: true,
+    );
+    if (isDuplicate) {
+      throw DuplicateDriveItemException(
+        'Tên thư mục "$trimmedName" đã tồn tại! Vui lòng đặt tên khác.',
+      );
+    }
+
+    final drive.File updateMeta = drive.File()..name = trimmedName;
+    await api.files.update(updateMeta, folderId, $fields: 'id, name');
+
+    final notifier =
+        tabIndex == 0 ? notesFoldersNotifier : observationFoldersNotifier;
+    notifier.value = notifier.value
+        .map(
+          (item) => item.id == folderId
+              ? DriveFolderItem(
+                  id: item.id,
+                  name: trimmedName,
+                  createdTime: item.createdTime,
+                )
+              : item,
+        )
+        .toList();
+  }
+
+  Future<void> deleteFolderInTab({
+    required int tabIndex,
+    required String folderId,
+  }) async {
+    final api = await _requireDriveApi();
+    final drive.File trashMeta = drive.File()..trashed = true;
+    await api.files.update(trashMeta, folderId);
+
+    final notifier =
+        tabIndex == 0 ? notesFoldersNotifier : observationFoldersNotifier;
+    notifier.value =
+        notifier.value.where((item) => item.id != folderId).toList();
+  }
+
+  // ===========================================================================
+  // 7. HÀM TẠO MỚI HOẶC GHI ĐÈ FILE JSON LÊN GOOGLE DRIVE
+  // - Khi tạo mới lần đầu (isCreatingNew == true): Kiểm tra chống trùng tên file.
+  // - Khi tự động lưu ghi đè (existingDriveFileId != null): Ghi đè trực tiếp.
   // ===========================================================================
   Future<String> uploadOrOverwriteJsonFile({
     required int tabIndex,
@@ -301,6 +456,7 @@ class GoogleDriveDatasource {
     String? existingDriveFileId,
     required String fileName,
     required Map<String, dynamic> jsonData,
+    bool checkDuplicateOnCreate = false,
   }) async {
     final api = await _requireDriveApi();
     await ensureAppFolderStructure();
@@ -308,8 +464,26 @@ class GoogleDriveDatasource {
     final String targetParentId = customParentFolderId ??
         (tabIndex == 0 ? _notesTabFolderId! : _observationTabFolderId!);
 
-    final String normalizedFileName =
-        fileName.endsWith('.json') ? fileName : '$fileName.json';
+    final String cleanBaseName = fileName.trim().endsWith('.json')
+        ? fileName.trim().substring(0, fileName.trim().length - 5)
+        : fileName.trim();
+    final String normalizedFileName = '$cleanBaseName.json';
+
+    // Nếu là tạo file mới lần đầu -> Kiểm tra chống trùng tên file
+    if (checkDuplicateOnCreate &&
+        (existingDriveFileId == null || existingDriveFileId.isEmpty)) {
+      final bool isDuplicate = await isItemNameDuplicate(
+        parentFolderId: targetParentId,
+        itemName: cleanBaseName,
+        isFolder: false,
+      );
+      if (isDuplicate) {
+        throw DuplicateDriveItemException(
+          'Tên tệp "$cleanBaseName" đã tồn tại! Vui lòng đặt tên khác.',
+        );
+      }
+    }
+
     final List<int> utf8Bytes = utf8.encode(
       const JsonEncoder.withIndent('  ').convert(jsonData),
     );
@@ -319,7 +493,6 @@ class GoogleDriveDatasource {
       contentType: _jsonMimeType,
     );
 
-    // Kiểm tra xem đã có ID file trên Drive chưa; nếu chưa có thì thử tìm theo tên trong thư mục đích
     String? fileIdToUpdate = existingDriveFileId;
     if (fileIdToUpdate == null || fileIdToUpdate.isEmpty) {
       final String escapedFileName = normalizedFileName.replaceAll("'", "\\'");
@@ -364,11 +537,17 @@ class GoogleDriveDatasource {
   }
 
   // ===========================================================================
-  // 7. HÀM TẢI DANH SÁCH THƯ MỤC TỪ GOOGLE DRIVE THEO TỪNG TAB
+  // 8. HÀM TẢI / LÀM MỚI DANH SÁCH THƯ MỤC TỪ GOOGLE DRIVE THEO TỪNG TAB
+  // Tự động đồng bộ lại nếu thư mục bị xóa trên Google Drive hoặc mạng lag
   // ===========================================================================
   Future<void> refreshAllTabFolders() async {
     isSyncingFoldersNotifier.value = true;
     try {
+      // Đặt lại ID bộ đệm để kiểm tra lại từ gốc phòng trường hợp thư mục gốc trên Drive bị xóa
+      _rootMeetingBookFolderId = null;
+      _notesTabFolderId = null;
+      _observationTabFolderId = null;
+
       await ensureAppFolderStructure();
       final results = await Future.wait([
         _fetchFoldersInParent(_notesTabFolderId!),
@@ -408,7 +587,7 @@ class GoogleDriveDatasource {
   }
 
   // ===========================================================================
-  // 8. HÀM LƯU THÔNG TIN DUY TRÌ ĐĂNG NHẬP & ĐĂNG XUẤT
+  // 9. HÀM LƯU THÔNG TIN DUY TRÌ ĐĂNG NHẬP & ĐĂNG XUẤT
   // ===========================================================================
   Future<void> _saveUserToPrefs(GoogleSignInAccount account) async {
     final prefs = await SharedPreferences.getInstance();

@@ -3,11 +3,13 @@ import 'package:flutter/material.dart';
 import '../core/constants/app_colors.dart';
 import '../core/theme/app_theme.dart';
 import '../data/datasources/google_drive_datasource.dart';
+import 'center_notification_dialog.dart';
 
 // ===========================================================================
 // WIDGET HIỂN THỊ DANH SÁCH / LƯỚI THƯ MỤC KIỂU GOOGLE DRIVE DÙNG CHUNG CHO 2 TAB
 // Công dụng:
-// - Góc trên bên phải (dưới Header): Nút chuyển đổi chế độ xem Danh sách <-> Lưới (Ô).
+// - Góc trên bên phải (dưới Header): Nút "Làm mới" (Reload từ Google Drive) nằm
+//   cùng dòng với nút chuyển chế độ xem Danh sách <-> Lưới (Ô).
 // - Bên dưới: Khu vực cuộn lên xuống (có Scrollbar) chứa các thư mục.
 // - Khi ở chế độ Lưới (Ô):
 //   + Tên thư mục nằm căn trái.
@@ -37,6 +39,7 @@ class DriveFolderSectionWidget extends StatefulWidget {
 
 class _DriveFolderSectionWidgetState extends State<DriveFolderSectionWidget> {
   final ScrollController _scrollController = ScrollController();
+  final GoogleDriveDatasource _driveDatasource = GoogleDriveDatasource.instance;
 
   // true = hiển thị theo từng ô (Lưới), false = hiển thị theo Danh sách
   bool _isGridView = true;
@@ -45,6 +48,30 @@ class _DriveFolderSectionWidgetState extends State<DriveFolderSectionWidget> {
   void dispose() {
     _scrollController.dispose();
     super.dispose();
+  }
+
+  /// Hàm xử lý khi bấm nút "Làm mới" và hiển thị thông báo giữa màn hình khi hoàn tất
+  Future<void> _handleRefreshWithNotification() async {
+    try {
+      await widget.onRefresh();
+      if (mounted) {
+        await showCenterNotification(
+          context: context,
+          title: 'Làm mới thành công',
+          message: 'Đã cập nhật danh sách mới nhất từ Google Drive!',
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        await showCenterNotification(
+          context: context,
+          title: 'Thông báo lỗi',
+          message:
+              'Không thể làm mới dữ liệu. Vui lòng kiểm tra kết nối mạng!',
+          isError: true,
+        );
+      }
+    }
   }
 
   /// Tính số lượng ô thư mục trên 1 hàng tùy theo chiều rộng màn hình:
@@ -79,7 +106,7 @@ class _DriveFolderSectionWidgetState extends State<DriveFolderSectionWidget> {
 
           return Column(
             children: [
-              // 1. Thanh điều khiển nằm ngay dưới Header: Góc trên bên phải là nút chuyển chế độ xem giống Google Drive
+              // 1. Thanh điều khiển nằm ngay dưới Header: Nút "Làm mới" nằm cùng dòng với nút chuyển chế độ xem Lưới/Danh sách
               Padding(
                 padding: EdgeInsets.fromLTRB(
                   horizontalPadding,
@@ -90,7 +117,66 @@ class _DriveFolderSectionWidgetState extends State<DriveFolderSectionWidget> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    // Nút chuyển chế độ xem Danh sách <-> Lưới (Ô) giống Google Drive ở góc trên bên phải
+                    // Nút "Làm mới" để tự động tải lại danh sách từ Google Drive (nếu mạng lag hoặc xóa thư mục trên Drive)
+                    ValueListenableBuilder<bool>(
+                      valueListenable:
+                          _driveDatasource.isSyncingFoldersNotifier,
+                      builder: (context, isSyncing, _) {
+                        return InkWell(
+                          borderRadius: BorderRadius.circular(20),
+                          onTap: isSyncing
+                              ? null
+                              : () => _handleRefreshWithNotification(),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.creamBackground,
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(
+                                color: AppColors.primaryBlue
+                                    .withValues(alpha: 0.25),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (isSyncing)
+                                  const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: AppColors.primaryBlue,
+                                    ),
+                                  )
+                                else
+                                  const Icon(
+                                    Icons.refresh_rounded,
+                                    color: AppColors.primaryBlue,
+                                    size: 20,
+                                  ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  isSyncing ? 'Đang tải...' : 'Làm mới',
+                                  style: TextStyle(
+                                    color: AppColors.primaryBlue,
+                                    fontSize: headerLabelSize * 0.92,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+
+                    const SizedBox(width: 10),
+
+                    // Nút chuyển chế độ xem Danh sách <-> Lưới (Ô) giống Google Drive
                     InkWell(
                       borderRadius: BorderRadius.circular(20),
                       onTap: () {
