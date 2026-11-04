@@ -14,13 +14,17 @@ class AppColors {
   static const Color basicWhite = Color(0xFFFFFFFF);
   static const Color white = basicWhite;
 
+  /// 4. Màu đen tiêu chuẩn (#000000)
+  static const Color basicBlack = Color(0xFF000000);
+  static const Color black = basicBlack;
+
   // Các sắc độ bổ trợ tự động đồng bộ
   static const Color primaryBlueLight = Color(0xFF4A5FD9);
   static const Color primaryBlueDark = Color(0xFF182675);
   static const Color creamSurface = Color(0xFFFFF9E8);
 
   // Màu chữ & viền cơ bản
-  static const Color textPrimary = Color(0xFF1E243B);
+  static const Color textPrimary = basicBlack;
   static const Color textSecondary = Color(0xFF5A6282);
 
   // Màu phục vụ trang giấy ô ly sau này

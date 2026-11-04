@@ -3,6 +3,7 @@
 ## Note
 1. Phải dùng các thuộc tính tự co dãn
 2. Phải dùng theo màu theme
+3. Phải dùng bộ font chữ theo theme (`Be Vietnam Pro` kiểu Google Drive) và hàm tự động co giãn cỡ chữ (`AppTheme.getResponsiveFontSize(context, baseFontSize)`)
 
 ---
 
