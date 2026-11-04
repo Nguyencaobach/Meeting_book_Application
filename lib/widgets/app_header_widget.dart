@@ -5,6 +5,8 @@ import '../core/theme/app_theme.dart';
 /// Widget Header dùng chung cho toàn ứng dụng (Tự động co giãn theo màn hình)
 class AppHeaderWidget extends StatelessWidget {
   final VoidCallback? onMenuPressed;
+  final VoidCallback? onUserPressed;
+  final String? userPhotoUrl;
   final ValueChanged<String>? onSearchChanged;
   final TextEditingController? searchController;
   final String hintText;
@@ -14,6 +16,8 @@ class AppHeaderWidget extends StatelessWidget {
   const AppHeaderWidget({
     super.key,
     this.onMenuPressed,
+    this.onUserPressed,
+    this.userPhotoUrl,
     this.onSearchChanged,
     this.searchController,
     this.hintText = 'Tìm kiếm trong nhật ký',
@@ -100,7 +104,42 @@ class AppHeaderWidget extends StatelessWidget {
                                   ),
                                 ),
                               ),
-                              const SizedBox(width: 16),
+
+                              // Góc bên phải trong ô tìm kiếm: Nút Icon User đẹp mắt
+                              Padding(
+                                padding: const EdgeInsets.only(right: 6),
+                                child: InkWell(
+                                  onTap: onUserPressed,
+                                  customBorder: const CircleBorder(),
+                                  child: Container(
+                                    width: 38,
+                                    height: 38,
+                                    decoration: BoxDecoration(
+                                      color: AppColors.primaryBlue, // Nền tròn màu xanh (#263BAA)
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: AppColors.creamBackground, // Viền màu kem (#FFF4D6)
+                                        width: 2,
+                                      ),
+                                      image: (userPhotoUrl != null &&
+                                              userPhotoUrl!.isNotEmpty)
+                                          ? DecorationImage(
+                                              image: NetworkImage(userPhotoUrl!),
+                                              fit: BoxFit.cover,
+                                            )
+                                          : null,
+                                    ),
+                                    child: (userPhotoUrl == null ||
+                                            userPhotoUrl!.isEmpty)
+                                        ? const Icon(
+                                            Icons.person_rounded,
+                                            color: AppColors.creamBackground, // Icon người dùng màu kem
+                                            size: 22,
+                                          )
+                                        : null,
+                                  ),
+                                ),
+                              ),
                             ],
                           ),
                         ),
@@ -158,6 +197,8 @@ class AppHeaderWidget extends StatelessWidget {
 /// Hàm tiện ích gọi nhanh Header dùng chung
 Widget buildAppHeader({
   VoidCallback? onMenuPressed,
+  VoidCallback? onUserPressed,
+  String? userPhotoUrl,
   ValueChanged<String>? onSearchChanged,
   TextEditingController? searchController,
   String hintText = 'Tìm kiếm trong nhật ký',
@@ -166,6 +207,8 @@ Widget buildAppHeader({
 }) {
   return AppHeaderWidget(
     onMenuPressed: onMenuPressed,
+    onUserPressed: onUserPressed,
+    userPhotoUrl: userPhotoUrl,
     onSearchChanged: onSearchChanged,
     searchController: searchController,
     hintText: hintText,

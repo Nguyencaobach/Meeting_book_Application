@@ -69,7 +69,7 @@ Sử dụng Widget `Listener` của Flutter để lọc sự kiện đầu vào 
 
 ### 3.4. Lưu trữ Dữ liệu, Đổi mẫu giấy & Xuất file PDF (Thay thế LaTeX)
 Thay vì dùng trình biên dịch LaTeX (`.tex`) nặng nề và gây trễ khi vẽ thời gian thực, sử dụng kiến trúc **JSON + `CustomPainter` + Package `pdf`**:
-* **Lưu trữ trên thiết bị (Local Storage):** Lưu cấu trúc Sổ tay $\rightarrow$ Trang $\rightarrow$ Dòng dưới dạng **JSON** (hoặc cơ sở dữ liệu nội bộ **Isar / SQLite**).
+* **Định dạng dữ liệu nhẹ (Lightweight JSON):** Lưu cấu trúc Thư mục $\rightarrow$ Sổ tay $\rightarrow$ Trang $\rightarrow$ Dòng dưới dạng **JSON** (chỉ nặng vài KB, không gây nặng bộ nhớ máy).
 * **Đổi kiểu mẫu giấy (Template Switching):** Chỉ cần thay đổi thuộc tính `"paperTemplate"` (`"oly_5_ly"`, `"oly_4_ly"`, `"ruled_line"`, `"cornell"`), `CustomPainter` trên màn hình và bộ xuất `pdf` sẽ tự động vẽ lại nền giấy tương ứng mà giữ nguyên toàn bộ các dòng chữ đã viết.
 * **Cấu trúc JSON mẫu của một trang vở:**
   ```json
@@ -85,8 +85,22 @@ Thay vì dùng trình biên dịch LaTeX (`.tex`) nặng nề và gây trễ khi
     ]
   }
   ```
-* **Sao lưu đám mây không cần Server (Cloud Backup):** Tích hợp `google_sign_in` và `googleapis` để tự động đồng bộ file JSON/Database vào thư mục ẩn `appDataFolder` trên **Google Drive cá nhân** của chính người dùng khi có kết nối mạng.
-* **Xuất file PDF Vector:** Dùng package `pdf` và `printing` của Dart để vẽ lại lưới ô ly và các dòng chữ ra file `.pdf` chuẩn A4 trong chưa đầy 0.5 giây.
+* **Xuất file PDF Vector (Khi cần chia sẻ/in ấn):** Dùng package `pdf` và `printing` của Dart để vẽ lại lưới ô ly và các dòng chữ ra file `.pdf` chuẩn A4 trong chưa đầy 0.5 giây.
+
+### 3.5. Cơ chế Lưu tạm RAM & Đồng bộ JSON thông minh lên Google Drive (Bộ đếm 30s & 3 Thời điểm vàng)
+Để đảm bảo màn hình viết bút cảm ứng đạt tốc độ 60–120fps mượt mà, tiết kiệm pin và không vượt hạn mức ghi đè của Google Drive API (`Rate Limit`), ứng dụng **không gửi Real-time từng nét bút** mà áp dụng quy trình **Lưu tức thì vào RAM + Đẩy lên Google Drive ở 3 thời điểm**:
+
+1. **Khi người dùng đang viết / thao tác (Lưu tức thì vào RAM & Reset bộ đếm 30 giây):**
+   * Mỗi khi người dùng viết chữ hoặc chỉnh sửa nội dung, dữ liệu được cập nhật tức thì (0ms) vào **RAM (`LocalStorageDatasource`)** và bộ đệm nội bộ trên máy, đồng thời bật cờ `isDirty = true`.
+   * Khởi động bộ đếm chờ **`Debounce Timer` (30 giây)**.
+   * **Nếu bộ đếm 30 giây đang chạy mà người dùng tiếp tục viết/thao tác tiếp:** Hệ thống lập tức **hủy bộ đếm 30 giây cũ**, lưu tiếp dữ liệu mới vào RAM và **đếm lại 30 giây từ đầu** kể từ lúc người dùng dừng bút hẳn.
+2. **Chỉ gọi Google Drive API để ghi đè file JSON ở đúng 3 thời điểm:**
+   * **Thời điểm 1 (Định kỳ thưa hơn - Sau 30 giây dừng bút):** Khi người dùng ngừng thao tác đủ 30 giây liên tục và có nội dung mới (`isDirty == true`), hệ thống mới đóng gói JSON và gửi ngầm lên ghi đè trên Google Drive.
+   * **Thời điểm 2 (Khi đóng trang vở):** Ngay khi người dùng bấm nút **Quay lại (`Back`)** để thoát khỏi trang ghi chú về màn hình Home (`syncOnPageExit()`).
+   * **Thời điểm 3 (Khi tắt màn hình / ẩn App):** Ngay khi người dùng bấm nút nguồn tắt màn hình hoặc vuốt thoát/ẩn ứng dụng xuống nền (`AppLifecycleState.paused`).
+3. **Xử lý Mất mạng giữa chừng (Khóa thao tác tức thì):**
+   * Ứng dụng lắng nghe trạng thái mạng liên tục qua `connectivity_plus`.
+   * Nếu đang thao tác mà mất mạng đột ngột: Toàn bộ chữ vừa viết đã nằm an toàn trong RAM/bộ đệm máy, ứng dụng **lập tức hiển thị thông báo khóa màn hình thao tác** cho đến khi có mạng trở lại để tự động đẩy bù gói JSON lên Google Drive.
 
 ---
 
@@ -120,7 +134,7 @@ lib/
 │   │   ├── local_storage_datasource.dart    # Đọc/ghi file JSON hoặc Database trên bộ nhớ máy
 │   │   └── google_drive_datasource.dart     # Đồng bộ sao lưu lên Google Drive cá nhân
 │   └── repositories/
-│       └── notebook_repository.dart         # Trung gian cung cấp dữ liệu cho tầng Controller
+│       └── data_sync_repository.dart        # Trung gian đồng bộ RAM & Google Drive (Bộ đếm 30s & 3 thời điểm)
 │
 ├── services/                                # Các dịch vụ xử lý độc lập với giao diện
 │   ├── handwriting_recognition_service.dart # Gọi Google ML Kit chuyển nét vẽ thành chuỗi văn bản
@@ -128,14 +142,39 @@ lib/
 │   └── stylus_input_filter.dart             # Lọc sự kiện chỉ nhận Bút cảm ứng & Chuột, chặn cảm ứng tay
 │
 ├── widgets/                                 # Các Widget dùng chung cho toàn bộ ứng dụng
+│   ├── app_header_widget.dart               # Header dùng chung (Ô tìm kiếm + Icon User + Thanh chuyển Tab)
+│   └── user_profile_dialog.dart             # Hộp thoại hiển thị Email đăng nhập & nút Đăng xuất
 │
 └── features/                                # Chia theo các mô-đun màn hình tính năng
-    └── home/                                # Màn hình Home chính của ứng dụng
+    ├── auth/                                # Màn hình Đăng nhập & Xác thực Google Drive
+    │   ├── service/
+    │   │   └── auth_service.dart            # Logic đăng nhập, kiểm tra phiên và đăng xuất
+    │   └── views/
+    │       └── login_screen.dart            # Giao diện màn hình Đăng nhập Google Drive
+    │
+    ├── home/                                # Màn hình Home chính của ứng dụng
+    │   ├── controllers/
+    │   │   └── home_controller.dart         # Quản lý trạng thái màn hình Home
+    │   ├── service/                         # Tầng xử lý logic riêng của màn hình Home
+    │   │   └── home_service.dart            # Xử lý logic tìm kiếm, đổi tab, mở Bottom Sheet tạo mới
+    │   └── views/
+    │       ├── home_screen.dart             # Giao diện chính của màn hình Home
+    │       └── widgets/                     # Các widget con chỉ dùng riêng trong màn hình Home
+    │           └── create_item_bottom_sheet.dart # Bottom Sheet trượt lên khi bấm nút (+)
+    │
+    ├── notes/                               # Tab 1: Màn hình Ghi chú
+    │   ├── controllers/
+    │   │   └── notes_controller.dart
+    │   └── views/
+    │       ├── notes_screen.dart
+    │       └── widgets/
+    │
+    └── observation_book/                    # Tab 2: Màn hình Sổ dự giờ
         ├── controllers/
-        │   └── home_controller.dart         # Quản lý trạng thái và logic màn hình Home
+        │   └── observation_book_controller.dart
         └── views/
-            ├── home_screen.dart             # Giao diện chính của màn hình Home
-            └── widgets/                     # Các widget con chỉ dùng riêng trong màn hình Home
+            ├── observation_book_screen.dart
+            └── widgets/
 ```
 
 ### 4.2. Giải thích chi tiết từng phân tầng & tệp tin
@@ -170,32 +209,15 @@ Chứa các mô-đun xử lý kỹ thuật độc lập, không phụ thuộc v�
 * **`pdf_export_service.dart`**: Sử dụng thư viện `pdf` để tái tạo lại chính xác hệ thống lưới ô ly (hoặc dòng kẻ ngang) và in từng dòng chữ (`LineModel`) lên trang PDF vector chuẩn A4 để xuất file hoặc in ấn.
 * **`stylus_input_filter.dart`**: Bộ lọc phần cứng giúp phân biệt tín hiệu từ Bút cảm ứng (`stylus`, `invertedStylus`) và Chuột (`mouse`) với cảm ứng ngón tay/bàn tay (`touch`), thực hiện cơ chế chống tì tay (Palm Rejection) khi viết.
 
-#### E. Tầng `features/` (Các Mô-đun Tính năng Giao diện & Điều khiển)
-Chia ứng dụng thành 2 màn hình chức năng độc lập:
-
-1. **`features/library/` (Mô-đun Kệ sách)**:
-   * **`controllers/library_controller.dart`**: Quản lý trạng thái danh sách các cuốn vở, xử lý các thao tác: tạo vở mới, đổi tên vở, xóa vở, hoặc kích hoạt đồng bộ Google Drive.
-   * **`views/library_screen.dart`**: Giao diện chính hiển thị lưới (Grid) các cuốn vở của người dùng.
-   * **`views/widgets/notebook_card_widget.dart`**: Widget hiển thị bìa của từng cuốn vở kèm tên, ngày chỉnh sửa gần nhất và nhãn loại giấy (4 ô ly / 5 ô ly).
-
-2. **`features/notebook_editor/` (Mô-đun Viết vở & Vẽ ô ly - Trái tim của ứng dụng)**:
-   * **`controllers/`**:
-     * **`editor_controller.dart`**: Quản lý trạng thái của cuốn vở đang mở (trang hiện tại, thêm trang mới, đổi mẫu giấy `paperTemplate`). Đặc biệt, chịu trách nhiệm nhận chuỗi văn bản từ AI, chèn vào đúng `rowIndex`, tự động ngắt dòng (`word-wrap`) xuống `rowIndex + 1` nếu chữ tràn lề phải, và tự động lưu xuống máy.
-     * **`ink_canvas_controller.dart`**: Quản lý mảng nét bút tươi đang được viết trên màn hình và điều khiển bộ đếm **`Debounce Timer` (600ms)**. Khi hết thời gian chờ mà người dùng không viết thêm nét mới, Controller này sẽ gửi nét vẽ sang `HandwritingRecognitionService`, xóa nét mực tạm và chuyển văn bản kết quả sang `EditorController`.
-   * **`views/`**:
-     * **`notebook_editor_screen.dart`**: Bố cục màn hình soạn thảo gồm thanh công cụ ở trên (`EditorToolbarWidget`) và vùng không gian chứa trang giấy ở giữa hỗ trợ phóng to/thu nhỏ (`InteractiveViewer`).
-   * **`views/painters/` (Tối ưu hóa đồ họa 60–120fps)**:
-     * **`base_paper_painter.dart`**: Lớp trừu tượng (`abstract class`) định nghĩa khung vẽ nền giấy, đường lề đỏ dọc và phần tiêu đề trang.
-     * **`oly_grid_painter.dart`**: Kế thừa từ `BasePaperPainter`, dùng vòng lặp vẽ hệ thống đường kẻ ngang/dọc nét đậm và nét đứt/mảnh để tạo thành lưới **vở 4 ô ly hoặc 5 ô ly** chuẩn Việt Nam.
-     * **`ruled_line_painter.dart`**: Kế thừa từ `BasePaperPainter`, chỉ vẽ các đường kẻ ngang đơn giản dành cho chế độ ghi chép nhanh/họp hành.
-     * **`active_ink_painter.dart`**: Lớp vẽ nằm đè lên trên cùng, kết hợp thuật toán `perfect_freehand` để vẽ nét mực tươi mềm mại theo lực nhấn của bút cảm ứng trong thời gian thực (chỉ vẽ lại lớp này khi bút di chuyển, không vẽ lại nền giấy ô ly bên dưới).
-   * **`views/widgets/`**:
-     * **`page_sheet_widget.dart`**: Tổ hợp một trang giấy hoàn chỉnh bằng `Stack`, xếp chồng 3 lớp theo thứ tự từ dưới lên:
-       1. Lớp nền giấy ô ly (`CustomPaint` với `OlyGridPainter` / `RuledLinePainter`).
-       2. Lớp hiển thị các dòng văn bản đã nhận diện (`List<LineTextSlotWidget>`).
-       3. Lớp bắt sự kiện bút cảm ứng (`Listener` dùng `StylusInputFilter`) và hiển thị nét mực đang viết (`ActiveInkPainter`).
-     * **`line_text_slot_widget.dart`**: Đặt cố định tại tọa độ `top = topMargin + rowIndex * lineHeight`, căn chỉnh baseline của chữ sao cho chân chữ nằm khớp hoàn hảo ngay trên đường kẻ ngang đậm của dòng ô ly đó (đồng thời cho phép chạm đúp để sửa lại bằng bàn phím nếu cần).
-     * **`editor_toolbar_widget.dart`**: Thanh công cụ phía trên cho phép chuyển trang, đổi mẫu giấy tức thì (4 ô ly $\leftrightarrow$ 5 ô ly $\leftrightarrow$ Kẻ ngang), chọn màu mực, xóa dòng và bấm xuất file PDF.
+#### E. Tầng `widgets/` & `features/` (Các Mô-đun Tính năng Giao diện & Điều khiển)
+* **`widgets/app_header_widget.dart`**: Widget Header dùng chung toàn ứng dụng, tích hợp ô tìm kiếm tự co giãn, nút Menu 3 gạch và thanh chuyển đổi Tab (`TabBar`).
+* **`features/home/` (Màn hình Home chính)**:
+  * **`service/home_service.dart`**: Chứa toàn bộ logic xử lý của màn hình Home (xác định chữ gợi ý tìm kiếm theo từng Tab, mở Bottom Sheet tương ứng với Tab đang chọn, xử lý tạo Ghi chú mới / Sổ dự giờ mới / Thêm thư mục mới).
+  * **`controllers/home_controller.dart`**: Quản lý trạng thái dữ liệu của màn hình Home.
+  * **`views/home_screen.dart`**: Giao diện khung chính kết nối Header, vùng nội dung `TabBarView`, nút nổi `+` và thanh Footer.
+  * **`views/widgets/create_item_bottom_sheet.dart`**: Giao diện Bottom Sheet trượt từ dưới lên (hỗ trợ vuốt tắt, nút `X` đóng bên phải, tràn full chiều ngang màn hình).
+* **`features/notes/` (Mô-đun Tab Ghi chú)**: Quản lý giao diện và chức năng riêng của danh sách Ghi chú / Nhật ký.
+* **`features/observation_book/` (Mô-đun Tab Sổ dự giờ)**: Quản lý giao diện và chức năng riêng của danh sách Sổ dự giờ.
 
 ---
 
@@ -221,9 +243,28 @@ touch lib/app.dart \
       lib/features/notebook_editor/views/widgets/{page_sheet_widget.dart,editor_toolbar_widget.dart}
 ```
 
-### 5.2. Lệnh cài đặt các thư viện (Packages) cốt lõi
+### 5.2. Danh sách các Thư viện (Packages) sử dụng trong Dự án & Lệnh cài đặt
+
+#### A. Các thư viện đã cài đặt và đang sử dụng:
+* **`google_fonts`**: Cung cấp bộ font chữ chuẩn Google Drive (`Be Vietnam Pro`) hỗ trợ tiếng Việt và chữ viết tay.
+* **`google_sign_in` (`^6.2.2`)**: Xác thực và đăng nhập tài khoản Google trên thiết bị Android.
+* **`googleapis`**: Cung cấp bộ thư viện `DriveApi` (`v3`) để tạo thư mục, tải lên và ghi đè file JSON trên Google Drive cá nhân.
+* **`http`**: Tạo `GoogleAuthClient` đính kèm mã xác thực OAuth vào các yêu cầu gọi Google Drive REST API.
+* **`shared_preferences`**: Lưu trạng thái duy trì đăng nhập (`is_logged_in`, `user_email`, `user_display_name`, `user_photo_url`) trên máy cho đến khi người dùng bấm Đăng xuất.
+* **`connectivity_plus`**: Kiểm tra trạng thái kết nối mạng (Wi-Fi / Dữ liệu di động) khi đăng nhập và theo dõi đứt mạng giữa chừng để khóa thao tác bảo vệ dữ liệu.
+
 ```bash
-flutter pub add google_mlkit_digital_ink_recognition perfect_freehand pdf printing path_provider google_fonts
+flutter pub add google_fonts "google_sign_in:^6.2.2" googleapis http shared_preferences connectivity_plus
+```
+
+#### B. Các thư viện phục vụ Viết bút cảm ứng, AI Nhận diện & Xuất PDF (Cài đặt ở giai đoạn làm trang vở):
+* **`google_mlkit_digital_ink_recognition`**: AI trên thiết bị (On-Device) chuyển nét vẽ viết tay thành văn bản tiếng Việt.
+* **`perfect_freehand`**: Nội suy nét mực mượt mà theo lực nhấn của bút cảm ứng (Stylus).
+* **`pdf` & `printing`**: Vẽ lại lưới ô ly và xuất trang vở ra file `.pdf` vector chuẩn A4.
+* **`path_provider`**: Truy xuất đường dẫn bộ nhớ đệm tạm thời trên thiết bị.
+
+```bash
+flutter pub add google_mlkit_digital_ink_recognition perfect_freehand pdf printing path_provider
 ```
 
 ---
@@ -234,3 +275,67 @@ flutter pub add google_mlkit_digital_ink_recognition perfect_freehand pdf printi
 3. **Giai đoạn 3 (Tích hợp AI Nhận diện chữ):** Kết nối `handwriting_recognition_service.dart` với bộ đếm `Debounce 600ms` để biến nét vẽ thành văn bản tiếng Việt và điền tự động vào dòng kẻ.
 4. **Giai đoạn 4 (Phân trang & Lưu trữ):** Hoàn thiện `editor_controller.dart` để tự động đẩy chữ tràn sang dòng/trang mới và lưu toàn bộ cuốn vở thành file JSON trong bộ nhớ máy.
 5. **Giai đoạn 5 (Xuất PDF & Đồng bộ Google Drive):** Hoàn thiện `pdf_export_service.dart` để xuất file PDF có kèm lưới ô ly và sao lưu tự động lên Google Drive.
+
+---
+
+## 7. Hướng dẫn Cấu hình Kết nối Google Drive Cá nhân (Google Cloud Console)
+
+Dịch vụ hoàn toàn **miễn phí 100%** và sử dụng trực tiếp dung lượng 15GB có sẵn trên Google Drive của người đăng nhập. Bất kỳ thiết bị Android nào cài ứng dụng đều có thể đăng nhập Gmail cá nhân để tự lưu dữ liệu vào Drive của chính mình.
+
+### 7.1. Bước 1: Tạo Project & Bật Google Drive API
+1. Truy cập [Google Cloud Console](https://console.cloud.google.com/) và đăng nhập bằng tài khoản Gmail.
+2. Bấm vào ô chọn dự án ở góc trên bên trái $\rightarrow$ Chọn **New Project** $\rightarrow$ Đặt tên dự án (ví dụ: `Meeting Booking`) $\rightarrow$ Bấm **Create**.
+3. Vào menu bên trái: **APIs & Services** $\rightarrow$ **Library**.
+4. Tìm kiếm **`Google Drive API`** $\rightarrow$ Bấm chọn và nhấn **Enable (Bật)**.
+
+### 7.2. Bước 2: Thiết lập Google Auth Platform (OAuth Consent Screen)
+Vào **APIs & Services** $\rightarrow$ **OAuth consent screen** (giao diện **Google Auth Platform**):
+1. **Mục `Overview`:**
+   * Bấm nút **Get started** (Bắt đầu).
+   * **App name:** Điền `Meeting Book`.
+   * **User support email:** Chọn Gmail của bạn.
+   * **Audience:** Chọn **External** (Cho phép mọi tài khoản Gmail cá nhân đăng nhập).
+   * **Contact Information:** Nhập email liên hệ $\rightarrow$ Tích đồng ý điều khoản và bấm **Create**.
+2. **Mục `Audience`:**
+   * Kéo xuống phần **Test users** $\rightarrow$ Bấm **+ Add users**.
+   * Nhập địa chỉ Gmail cá nhân sẽ dùng để đăng nhập trên máy tính bảng/điện thoại (tối đa 100 Gmail thử nghiệm, hoặc bấm **Publish App** nếu muốn mở cho mọi Gmail không cần thêm tay) $\rightarrow$ Bấm **Save**.
+
+### 7.3. Bước 3: Tạo khóa kết nối Android (`Clients`)
+1. Ở menu trái của Google Auth Platform, chọn **`Clients`** $\rightarrow$ Bấm **+ Create Client** (hoặc trong **Credentials** $\rightarrow$ **+ Create Credentials** $\rightarrow$ **OAuth client ID**).
+2. **Application type:** Chọn **`Android`**.
+3. Điền 2 thông số định danh ứng dụng:
+   * **Package name:**
+     ```text
+     com.example.meeting_book_application
+     ```
+   * **SHA-1 certificate fingerprint (Mã khóa máy hiện tại):**
+     ```text
+     4C:D3:2A:DA:6D:DA:71:91:32:3A:B7:56:B1:B2:E3:A3:D0:CC:76:DC
+     ```
+4. Bấm **Create** để hoàn tất (không cần tải file JSON về máy vì Android tự xác thực qua cặp `Package name` + `SHA-1`).
+
+> **Mẹo lấy mã SHA-1 khi chuyển sang máy tính khác để lập trình:**
+> Mở PowerShell trên Windows và chạy lệnh sau để lấy mã SHA-1 của máy tính mới rồi thêm vào mục `Clients` trên Google Cloud:
+> ```powershell
+> & "C:\Program Files\Android\Android Studio\jbr\bin\keytool.exe" -list -v -alias androiddebugkey -keystore "$env:USERPROFILE\.android\debug.keystore" -storepass android -keypass android | Select-String "SHA1"
+> ```
+
+### 7.4. Lệnh cài đặt thư viện kết nối Google Drive & Kiểm tra mạng trong Flutter
+```bash
+flutter pub add google_fonts "google_sign_in:^6.2.2" googleapis http shared_preferences connectivity_plus
+```
+
+### 7.5. Nguyên lý Hoạt động của Cơ chế Đăng nhập & Kết nối Google Drive
+1. **Kiểm tra mạng & Mở bảng chọn tài khoản Google chính thống (`LoginScreen` & `AuthService`):**
+   * Trên màn hình `LoginScreen`, khi người dùng bấm nút **"Kết nối tài khoản Google"**, ứng dụng kiểm tra kết nối mạng thực tế qua `connectivity_plus` + phân giải DNS `google.com`. Nếu mất mạng, chặn đăng nhập và báo lỗi ngay trên màn hình.
+   * Khi có mạng, ứng dụng bật trực tiếp bảng chọn tài khoản Google chính thống của Android (*"Choose an account"*).
+2. **Ủy quyền OAuth2 & Liên kết `DriveApi` (`GoogleDriveDatasource`):**
+   * Gọi `GoogleSignIn` với quyền `DriveApi.driveFileScope` (cho phép ứng dụng tạo, xem, chỉnh sửa và xóa các tệp/thư mục do chính ứng dụng tạo trên Google Drive của người dùng).
+   * Ở lần đăng nhập đầu tiên, người dùng chọn tài khoản Gmail, tích chọn ô cấp quyền truy cập Google Drive và bấm **Continue**.
+   * Hệ thống lấy `authHeaders` từ tài khoản vừa chọn gắn vào `GoogleAuthClient` để khởi tạo đối tượng `drive.DriveApi`.
+3. **Duy trì đăng nhập tự động (`SharedPreferences` & `signInSilently`):**
+   * Sau khi liên kết thành công, thông tin phiên (`is_logged_in`, `user_email`, `user_display_name`, `user_photo_url`) được lưu vào `SharedPreferences`.
+   * Ở những lần mở ứng dụng tiếp theo, `AuthGateScreen` (`app.dart`) tự động kiểm tra phiên đã lưu và gọi `signInSilently()` để nối lại `DriveApi` ngầm, đưa người dùng vào thẳng màn hình `HomeScreen` mà không cần đăng nhập lại.
+4. **Quản lý Tài khoản & Đăng xuất (`UserProfileDialog`):**
+   * Tại góc bên phải của ô tìm kiếm trên Header có nút **Icon User**. Khi bấm vào sẽ hiển thị tên, địa chỉ Email đang đăng nhập, trạng thái liên kết Google Drive và nút **Đăng xuất**.
+   * Chỉ khi người dùng chủ động bấm **Đăng xuất**, ứng dụng mới ngắt phiên `GoogleSignIn`, xóa `SharedPreferences` và quay trở về màn hình `LoginScreen`.
