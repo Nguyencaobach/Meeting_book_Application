@@ -1,29 +1,29 @@
 import 'package:flutter/material.dart';
-import 'app_colors.dart';
+import '../app_colors.dart';
 
 // ===========================================================================
-// MẪU ĐỊNH DẠNG VỞ 4 Ô LY (NOTE4X)
+// MẪU ĐỊNH DẠNG VỞ 5 Ô LY (NOTE5X) - TRONG THƯ MỤC NOTE_TEMPLATES
 // Công dụng:
-// - Định nghĩa thông số khoảng cách dòng dựa trên tỷ lệ chuẩn vở 4 ô ly (4 khoảng đơn vị).
+// - Định nghĩa thông số khoảng cách dòng dựa trên tỷ lệ chuẩn vở 5 ô ly (5 khoảng đơn vị).
 // - Tự động co giãn chiều cao dòng (lineSpacing) đầy đủ theo mọi kích thước màn hình
 //   từ điện thoại đến máy tính bảng lớn (Xiaomi Pad 8 11.2 inch).
 // - Chỉ vẽ ĐƯỜNG KẺ NGANG (không vẽ đường kẻ dọc) để tạo dòng viết thông thoáng.
 // - Toàn bộ hàm màu sắc đều lấy trực tiếp từ bảng màu Theme (AppColors).
 // ===========================================================================
-class Note4x {
-  Note4x._();
+class Note5x {
+  Note5x._();
 
   /// Mã định danh lưu trong file JSON trên Google Drive
-  static const String templateId = 'note4x';
+  static const String templateId = 'note5x';
 
   /// Tên hiển thị cho người dùng khi chọn loại vở
-  static const String displayName = 'Vở 4 ô ly';
+  static const String displayName = 'Vở 5 ô ly';
 
-  /// Số đơn vị ô ly cấu thành 1 dòng viết của vở 4 ô ly
-  static const int oliUnitsPerRow = 4;
+  /// Số đơn vị ô ly cấu thành 1 dòng viết của vở 5 ô ly
+  static const int oliUnitsPerRow = 5;
 
   /// Số dòng mặc định tối thiểu trên 1 trang giấy
-  static const int defaultLineCount = 28;
+  static const int defaultLineCount = 24;
 
   /// Chiều ngang tối thiểu chuẩn của trang giấy vở (đơn vị logic dp).
   /// - Mọi máy tính bảng (dọc >= 540dp & ngang) và điện thoại xoay ngang đều hiển thị trọn chiều ngang màn hình.
@@ -60,7 +60,7 @@ class Note4x {
   }
 
   // ===========================================================================
-  // CÁC HÀM TỰ ĐỘNG CO GIÃN KHOẢNG CÁCH DÒNG DỰA TRÊN CHUẨN 4 Ô LY
+  // CÁC HÀM TỰ ĐỘNG CO GIÃN KHOẢNG CÁCH DÒNG DỰA TRÊN CHUẨN 5 Ô LY
   // ===========================================================================
 
   /// Tính chiều cao của 1 đơn vị ô ly nhỏ tự động co giãn theo kích thước màn hình
@@ -72,14 +72,14 @@ class Note4x {
     final double referenceWidth = maxWidth ?? screenSize.width;
     final double shortestSide = screenSize.shortestSide;
 
-    // Làm tròn số nguyên pixel để mọi khoảng chia 4 ô ly đều nhau tuyệt đối, không bị lệch sub-pixel
+    // Làm tròn số nguyên pixel để mọi khoảng chia 5 ô ly đều nhau tuyệt đối, không bị lệch sub-pixel
     final double baseUnit =
         (referenceWidth * 0.0085 + shortestSide * 0.0065).clamp(9.0, 13.0);
     return baseUnit.roundToDouble();
   }
 
-  /// Tính khoảng cách dòng viết (chiều cao 1 dòng ngang = 4 đơn vị ô ly * unitHeight)
-  /// Tự động giãn đầy đủ theo màn hình dựa trên chuẩn 4 ô ly
+  /// Tính khoảng cách dòng viết (chiều cao 1 dòng ngang = 5 đơn vị ô ly * unitHeight)
+  /// Tự động giãn đầy đủ theo màn hình dựa trên chuẩn 5 ô ly
   static double getResponsiveRowHeight(
     BuildContext context, {
     double? maxWidth,
@@ -105,17 +105,17 @@ class Note4x {
 }
 
 // ===========================================================================
-// BỘ VẼ ĐƯỜNG KẺ NGANG CHO MẪU VỞ 4 Ô LY (CHỈ VẼ ĐƯỜNG NGANG, KHÔNG VẼ ĐƯỜNG DỌC)
+// BỘ VẼ ĐƯỜNG KẺ NGANG CHO MẪU VỞ 5 Ô LY (CHỈ VẼ ĐƯỜNG NGANG, KHÔNG VẼ ĐƯỜNG DỌC)
 // Công dụng:
-// - Vẽ các dòng kẻ ngang cách đều nhau theo đúng khoảng cách 4 ô ly (rowHeight).
+// - Vẽ các dòng kẻ ngang cách đều nhau theo đúng khoảng cách 5 ô ly (rowHeight).
 // - Không vẽ bất kỳ đường kẻ dọc nào theo đúng yêu cầu của người dùng.
 // ===========================================================================
-class Note4xHorizontalPaperPainter extends CustomPainter {
+class Note5xHorizontalPaperPainter extends CustomPainter {
   final double rowHeight;
   final int totalRows;
   final bool showSubLines;
 
-  const Note4xHorizontalPaperPainter({
+  const Note5xHorizontalPaperPainter({
     required this.rowHeight,
     required this.totalRows,
     this.showSubLines = true,
@@ -125,33 +125,33 @@ class Note4xHorizontalPaperPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     // 1. Tô nền giấy theo hàm màu Theme
     final Paint bgPaint = Paint()
-      ..color = Note4x.getPaperBackgroundColor()
+      ..color = Note5x.getPaperBackgroundColor()
       ..style = PaintingStyle.fill;
     canvas.drawRect(Offset.zero & size, bgPaint);
 
     // 2. Bút vẽ đường kẻ ngang chính tạo mỗi ô ly lớn (Đậm màu, đều nét)
     final Paint mainLinePaint = Paint()
-      ..color = Note4x.getHorizontalLineColor()
+      ..color = Note5x.getHorizontalLineColor()
       ..strokeWidth = 1.5
       ..isAntiAlias = false
       ..style = PaintingStyle.stroke;
 
     // 3. Bút vẽ đường kẻ ngang phụ bên trong ô (Mờ màu đồng đều 100% giữa các dòng)
     final Paint subLinePaint = Paint()
-      ..color = Note4x.getSubHorizontalLineColor()
+      ..color = Note5x.getSubHorizontalLineColor()
       ..strokeWidth = 1.0
       ..isAntiAlias = false
       ..style = PaintingStyle.stroke;
 
-    final double subStep = rowHeight / Note4x.oliUnitsPerRow;
+    final double subStep = rowHeight / Note5x.oliUnitsPerRow;
 
     for (int row = 0; row < totalRows; row++) {
       final double rowTop = row * rowHeight;
       final double rowBottom = ((row + 1) * rowHeight).roundToDouble();
 
-      // Vẽ 3 đường ngang phụ mờ đều bên trong mỗi ô 4 ô ly
+      // Vẽ 4 đường ngang phụ mờ đều bên trong mỗi ô 5 ô ly
       if (showSubLines) {
-        for (int sub = 1; sub < Note4x.oliUnitsPerRow; sub++) {
+        for (int sub = 1; sub < Note5x.oliUnitsPerRow; sub++) {
           final double subY = (rowTop + (sub * subStep)).roundToDouble();
           if (subY <= size.height) {
             canvas.drawLine(
@@ -175,7 +175,7 @@ class Note4xHorizontalPaperPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant Note4xHorizontalPaperPainter oldDelegate) {
+  bool shouldRepaint(covariant Note5xHorizontalPaperPainter oldDelegate) {
     return oldDelegate.rowHeight != rowHeight ||
         oldDelegate.totalRows != totalRows ||
         oldDelegate.showSubLines != showSubLines;

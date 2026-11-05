@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../core/constants/app_colors.dart';
-import '../core/constants/note4x.dart';
-import '../core/constants/note5x.dart';
+import '../core/constants/note_templates/note4x.dart';
+import '../core/constants/note_templates/note5x.dart';
 import '../core/theme/app_theme.dart';
 import '../data/datasources/google_drive_datasource.dart';
 import '../data/models/notebook_model.dart';

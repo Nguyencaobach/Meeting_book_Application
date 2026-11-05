@@ -1,5 +1,5 @@
-import '../../core/constants/note4x.dart';
-import '../../core/constants/note5x.dart';
+import '../../core/constants/note_templates/note4x.dart';
+import '../../core/constants/note_templates/note5x.dart';
 import 'page_model.dart';
 
 // ===========================================================================

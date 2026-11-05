@@ -107,176 +107,228 @@ Thay vì dùng trình biên dịch LaTeX (`.tex`) nặng nề và gây trễ khi
 
 ## 4. Cấu trúc Thư mục Dự án (`lib/`)
 
-Dự án được tổ chức theo kiến trúc **Feature-First kết hợp Clean Architecture rút gọn (Layered Architecture)**, giúp tách biệt rõ ràng giữa giao diện (UI/Painters), logic điều khiển (Controllers), dịch vụ hệ thống/AI (Services) và tầng dữ liệu (Data).
+Dự án được tổ chức theo kiến trúc **Feature-First kết hợp Clean Architecture rút gọn (Layered Architecture)**, giúp tách biệt rõ ràng giữa giao diện (UI/Painters), logic điều khiển (Controllers/Services), dịch vụ hệ thống/AI (Services) và tầng dữ liệu (Data).
 
-### 4.1. Sơ đồ cây thư mục
+### 4.1. Sơ đồ cây thư mục (Cập nhật đầy đủ theo thực tế dự án hiện tại)
 
 ```text
 lib/
-├── main.dart
-├── app.dart
+├── main.dart                                # Điểm khởi chạy ứng dụng, cấu hình hệ thống & gọi runApp()
+├── app.dart                                 # MaterialApp gốc, cấu hình AppTheme & AuthGateScreen kiểm tra phiên đăng nhập
 │
-├── core/                                    # Cấu hình & hằng số dùng chung toàn app
+├── core/                                    # Cấu hình, hằng số, mẫu giấy & tiện ích dùng chung toàn app
 │   ├── constants/
 │   │   ├── app_colors.dart                  # Bảng màu chuẩn theo Theme (#263BAA, #FFF4D6, #FFFFFF, #000000)
-│   │   ├── note5x.dart                      # Định dạng vở 5 ô ly (chỉ vẽ đường ngang, tự co giãn theo 5 ô ly)
-│   │   └── note4x.dart                      # Định dạng vở 4 ô ly (chỉ vẽ đường ngang, tự co giãn theo 4 ô ly)
+│   │   ├── note_templates/                  # Thư mục gom các định dạng giấy ô ly cho Tab Ghi chú
+│   │   │   ├── note5x.dart                  # Định dạng vở 5 ô ly (Note5xHorizontalPaperPainter vẽ dòng kẻ ngang co giãn)
+│   │   │   └── note4x.dart                  # Định dạng vở 4 ô ly (Note4xHorizontalPaperPainter vẽ dòng kẻ ngang co giãn)
+│   │   └── observation_templates/           # Thư mục gom các biểu mẫu cho Tab Sổ dự giờ
+│   │       ├── primary_school_evaluation_template.dart # Biểu mẫu 3 trang "Phiếu đánh giá tiết dạy giáo viên cấp Tiểu học"
+│   │       └── blank_observation_template.dart         # Biểu mẫu sổ dự giờ trống code sẵn & danh sách biểu mẫu (availableTemplates)
 │   ├── theme/
-│   │   └── app_theme.dart                   # Cấu hình font chữ Be Vietnam Pro, hàm tự động co giãn cỡ chữ
+│   │   └── app_theme.dart                   # Cấu hình font chữ Be Vietnam Pro & hàm getResponsiveFontSize()
 │   └── utils/
 │       └── coordinate_converter.dart        # Hàm chuyển đổi tọa độ Y của bút -> chỉ số dòng (rowIndex)
 │
-├── data/                                    # Tầng dữ liệu (RAM tạm thời & Đồng bộ Google Drive)
+├── data/                                    # Tầng dữ liệu (RAM tạm thời 0ms & Đồng bộ Google Drive cá nhân)
 │   ├── models/
-│   │   ├── notebook_model.dart              # Thông tin cuốn vở (id, tên, loại mẫu giấy, ngày tạo)
-│   │   ├── page_model.dart                  # Thông tin trang giấy (số trang, danh sách dòng)
-│   │   ├── line_model.dart                  # Dữ liệu từng dòng (rowIndex, text đã nhận diện)
-│   │   └── stroke_point_model.dart          # Tọa độ nét bút tạm (x, y, pressure, timestamp)
+│   │   ├── notebook_model.dart              # Thông tin cuốn vở/file ghi chú (id, title, paperTemplate, pages)
+│   │   ├── page_model.dart                  # Thông tin trang giấy (pageNumber, paperTemplate, danh sách dòng lines)
+│   │   ├── line_model.dart                  # Dữ liệu từng dòng kẻ ngang (rowIndex, chuỗi text)
+│   │   └── stroke_point_model.dart          # Tọa độ điểm nét bút tạm (x, y, pressure, timestamp)
 │   ├── datasources/
-│   │   ├── local_storage_datasource.dart    # Lưu tạm dữ liệu JSON tức thì trên RAM (_ramCache, 0ms, không ghi ổ cứng máy)
-│   │   └── google_drive_datasource.dart     # Đồng bộ sao lưu lên Google Drive cá nhân
+│   │   ├── local_storage_datasource.dart    # Chỉ lưu tạm JSON trên bộ nhớ RAM (_ramCache, 0ms), không ghi ổ cứng máy
+│   │   └── google_drive_datasource.dart     # Kết nối Google Drive API: tạo/đổi tên/xóa/di chuyển cây thư mục, hoàn tác & đọc/ghi file .json
 │   └── repositories/
-│       └── data_sync_repository.dart        # Trung gian đồng bộ RAM & Google Drive (Bộ đếm 30s & 3 thời điểm)
+│       └── data_sync_repository.dart        # Trung gian đồng bộ RAM -> Google Drive (Bộ đếm 30s, 3 thời điểm vàng, nút Lưu & khóa mất mạng)
 │
-├── services/                                # Các dịch vụ xử lý độc lập với giao diện
-│   ├── handwriting_recognition_service.dart # Gọi Google ML Kit chuyển nét vẽ thành chuỗi văn bản
-│   ├── pdf_export_service.dart              # Vẽ lại lưới ô ly + chữ và xuất ra file .pdf chuẩn A4
-│   └── stylus_input_filter.dart             # Lọc sự kiện chỉ nhận Bút cảm ứng & Chuột, chặn cảm ứng tay
+├── services/                                # Các dịch vụ xử lý độc lập với giao diện (AI nhận diện bút, Lọc bút, Xuất PDF)
+│   ├── handwriting_recognition_service.dart # Gọi Google ML Kit Digital Ink (model 'vi') chuyển nét vẽ viết tay thành văn bản tiếng Việt
+│   ├── pdf_export_service.dart              # Vẽ lại dòng kẻ vở + chữ và xuất ra file .pdf chuẩn A4
+│   └── stylus_input_filter.dart             # Lọc sự kiện Bút cảm ứng / Chuột / Chạm và chống tì tay (Palm Rejection)
 │
-├── widgets/                                 # Các Widget dùng chung cho toàn bộ ứng dụng
+├── widgets/                                 # Các Widget & Hộp thoại dùng chung cho toàn bộ ứng dụng
 │   ├── app_header_widget.dart               # Header dùng chung (Ô tìm kiếm + Icon User + Thanh chuyển Tab)
-│   └── user_profile_dialog.dart             # Hộp thoại hiển thị Email đăng nhập & nút Đăng xuất
+│   ├── center_notification_dialog.dart      # Hộp thoại thông báo Thành công / Thất bại giữa màn hình (hỗ trợ nút Hoàn tác)
+│   ├── create_folder_dialog.dart            # Hộp thoại tạo Thư mục mới trên Google Drive (tối đa 150 ký tự, chống trùng tên)
+│   ├── create_note_dialog.dart              # Hộp thoại tạo Tệp ghi chú mới (.json) kèm chọn mẫu vở 5 ô ly / 4 ô ly
+│   ├── create_observation_book_dialog.dart  # Hộp thoại tạo Tệp sổ dự giờ mới (.json) kèm chọn biểu mẫu hiển thị dạng Danh sách (List)
+│   ├── drive_folder_section_widget.dart     # Khu vực hiển thị Thư mục & Tệp kiểu Google Drive (Lưới ô / Danh sách, điều hướng đa cấp, Làm mới)
+│   ├── item_actions_bottom_sheet.dart       # Bottom Sheet nút "i" (Đổi tên chống trùng, Xóa có hoàn tác, Di chuyển dạng Cây thư mục)
+│   ├── network_lock_overlay_widget.dart     # Màn hình khóa thao tác tức thì khi mất kết nối mạng hoặc lỗi bộ nhớ RAM
+│   └── user_profile_dialog.dart             # Hộp thoại hiển thị thông tin tài khoản Gmail đang liên kết & nút Đăng xuất
 │
 └── features/                                # Chia theo các mô-đun màn hình tính năng
-    ├── auth/                                # Màn hình Đăng nhập & Xác thực Google Drive
+    ├── auth/                                # Mô-đun Đăng nhập & Xác thực Google Drive
     │   ├── service/
-    │   │   └── auth_service.dart            # Logic đăng nhập, kiểm tra phiên và đăng xuất
+    │   │   └── auth_service.dart            # Logic kiểm tra mạng, đăng nhập OAuth2 Google Drive, khôi phục phiên & đăng xuất
     │   └── views/
-    │       └── login_screen.dart            # Giao diện màn hình Đăng nhập Google Drive
+    │       └── login_screen.dart            # Giao diện màn hình Đăng nhập & Liên kết Google Drive
     │
-    ├── home/                                # Màn hình Home chính của ứng dụng
+    ├── home/                                # Mô-đun Màn hình Home chính của ứng dụng
     │   ├── controllers/
-    │   │   └── home_controller.dart         # Quản lý trạng thái màn hình Home
-    │   ├── service/                         # Tầng xử lý logic riêng của màn hình Home
-    │   │   └── home_service.dart            # Xử lý logic tìm kiếm, đổi tab, mở Bottom Sheet tạo mới
+    │   │   └── home_controller.dart         # Quản lý trạng thái điều khiển màn hình Home
+    │   ├── service/
+    │   │   └── home_service.dart            # Xử lý tìm kiếm theo Tab, mở thông tin User, mở Bottom Sheet tạo Thư mục / Ghi chú / Sổ dự giờ
     │   └── views/
-    │       ├── home_screen.dart             # Giao diện chính của màn hình Home
-    │       └── widgets/                     # Các widget con chỉ dùng riêng trong màn hình Home
-    │           └── create_item_bottom_sheet.dart # Bottom Sheet trượt lên khi bấm nút (+)
-    │
-    ├── notes/                               # Tab 1: Màn hình Ghi chú
-    │   ├── controllers/
-    │   │   └── notes_controller.dart
-    │   └── views/
-    │       ├── notes_screen.dart
+    │       ├── home_screen.dart             # Giao diện chính của màn hình Home (Header + TabBarView + Nút nổi '+' + Footer)
     │       └── widgets/
+    │           └── create_item_bottom_sheet.dart # Bottom Sheet trượt lên khi bấm nút (+) để chọn Tạo tệp mới hoặc Tạo thư mục mới
     │
-    └── observation_book/                    # Tab 2: Màn hình Sổ dự giờ
+    ├── notes/                               # Tab 1: Mô-đun Ghi chú & Trình soạn thảo Trang vở / Biểu mẫu
+    │   ├── controllers/
+    │   │   └── notes_controller.dart        # Quản lý trạng thái danh sách Ghi chú
+    │   └── views/
+    │       ├── notes_screen.dart            # Màn hình danh sách Thư mục & Tệp ghi chú (.json) trong MeetingBook/Ghi_Chu
+    │       ├── note_editor_screen.dart      # Màn hình Trang vở & Biểu mẫu (note5x/note4x/observation_blank_v1): Bàn phím Telex, Viết bút, Chỉ xem, Làm mới, Con trỏ kéo ngang & Lưu Google Drive
+    │       └── widgets/
+    │           └── pen_handwriting_pad_widget.dart # Bảng giấy viết bút 60-120fps (RepaintBoundary): vẽ nét mực mượt, tự nối chữ/cách từ & tự mờ nét sau khi chèn chữ
+    │
+    └── observation_book/                    # Tab 2: Mô-đun Sổ dự giờ
         ├── controllers/
-        │   └── observation_book_controller.dart
+        │   └── observation_book_controller.dart # Quản lý trạng thái danh sách Sổ dự giờ
         └── views/
-            ├── observation_book_screen.dart
-            └── widgets/
+            └── observation_book_screen.dart # Màn hình danh sách Thư mục & Tệp sổ dự giờ (.json) trong MeetingBook/So_Du_Gio (mở thư mục đa cấp & mở biểu mẫu)
 ```
 
 ### 4.2. Giải thích chi tiết từng phân tầng & tệp tin
 
 #### A. Khởi tạo ứng dụng (`Root`)
-* **`main.dart`**: Điểm bắt đầu của ứng dụng (`void main()`), khởi tạo `WidgetsFlutterBinding`, cấu hình hướng màn hình, tải trước các tài nguyên thiết yếu (như kiểm tra gói ngôn ngữ ML Kit tiếng Việt) và chạy `runApp()`.
-* **`app.dart`**: Chứa Widget gốc (`MaterialApp`), thiết lập `AppTheme`, cấu hình điều hướng (Routing) giữa màn hình Kệ sách (`LibraryScreen`) và màn hình Viết vở (`NotebookEditorScreen`).
+* **`main.dart`**: Điểm bắt đầu của ứng dụng (`void main()`), khởi tạo `WidgetsFlutterBinding` và chạy `runApp(const MeetingBookApp())`.
+* **`app.dart`**: Chứa Widget gốc (`MaterialApp`), thiết lập `AppTheme` (font `Be Vietnam Pro`, bảng màu chuẩn) và `AuthGateScreen` tự động kiểm tra phiên đăng nhập Google Drive để điều hướng thẳng vào `HomeScreen` hoặc `LoginScreen`.
 
-#### B. Tầng `core/` (Cấu hình, Hằng số & Tiện ích dùng chung)
-Chứa các giá trị bất biến và hàm tính toán thuần túy được sử dụng xuyên suốt từ lúc vẽ UI cho đến lúc xuất PDF:
-* **`constants/paper_dimensions.dart`**: Định nghĩa hệ tọa độ logic chuẩn A4 (`width = 800.0`, `height = 1131.0`), chiều cao mỗi dòng kẻ lớn (`lineHeight = 40.0`), lề trên (`topMargin`), lề trái đường kẻ đỏ (`leftMargin`), và số ô ly nhỏ trong một dòng (4 hoặc 5 ô ly).
-* **`constants/app_colors.dart`**: Quản lý bảng màu chuẩn của vở học sinh Việt Nam (màu nền giấy vàng kem chống mỏi mắt `#FDFBF7`, màu xanh cyan của dòng kẻ ô ly, màu đỏ của đường lề dọc, màu mực bút xanh/đen/đỏ).
-* **`theme/app_theme.dart`**: Thiết lập giao diện tổng thể cho ứng dụng và cấu hình các bộ font chữ viết tay tiếng Việt (như *Patrick Hand*, *Mali*, hoặc *Caveat*) để văn bản sau khi nhận diện có cảm giác tự nhiên như chữ viết thật.
-* **`utils/coordinate_converter.dart`**: Chứa các hàm toán học chuyển đổi tọa độ điểm chạm thực tế $(X, Y)$ của bút cảm ứng trên vùng trang giấy sang chỉ số dòng (`rowIndex`) và kiểm tra xem điểm chạm có nằm trong vùng viết hợp lệ hay không.
+#### B. Tầng `core/` (Cấu hình, Hằng số, Thư mục Mẫu giấy Ô ly & Thư mục Biểu mẫu Sổ dự giờ)
+Chứa các giá trị bất biến, thông số dòng kẻ và hàm tính toán co giãn dùng xuyên suốt ứng dụng:
+* **`constants/app_colors.dart`**: Quản lý bảng màu chuẩn theo Theme (`primaryBlue` `#263BAA`, `creamBackground` `#FFF4D6`, `basicWhite` `#FFFFFF`, `basicBlack` `#000000`, `paperMarginRed` `#E53935`).
+* **`constants/note_templates/` (Thư mục gom các mẫu ô ly cho Ghi chú)**:
+  * **`note5x.dart`**: Định nghĩa thông số tỷ lệ và `Note5xHorizontalPaperPainter` vẽ trang giấy kẻ ngang theo chuẩn tỷ lệ vở **5 ô ly** (`note5x`), tự động co giãn chiều cao dòng và cỡ chữ theo màn hình.
+  * **`note4x.dart`**: Định nghĩa thông số tỷ lệ và `Note4xHorizontalPaperPainter` vẽ trang giấy kẻ ngang theo chuẩn tỷ lệ vở **4 ô ly** (`note4x`), tự động co giãn chiều cao dòng và cỡ chữ theo màn hình.
+* **`constants/observation_templates/` (Thư mục gom các biểu mẫu cho Sổ dự giờ)**:
+  * **`primary_school_evaluation_template.dart`**: Tái tạo 100% biểu mẫu 3 trang **"Phiếu đánh giá tiết dạy giáo viên cấp Tiểu học"** (`primary_school_eval_v1`) gồm: Quốc hiệu & thông tin người dạy, Bảng ghi chép tiến trình 3 cột (28 dòng nét đứt), Nhận xét chung (5 dòng chấm), Bảng thang điểm 12 tiêu chí (`1.1` -> `3.4`, tự động cộng tổng điểm trên `20,0`), quy định 4 mức xếp loại, tự động xét loại tiết dạy và mục ký tên Người dự giờ.
+  * **`blank_observation_template.dart`**: Định nghĩa `ObservationTemplateItem`, danh sách các biểu mẫu Sổ dự giờ (`availableTemplates`), thông số co giãn `BlankObservationTemplate` (`observation_blank_v1`) và `BlankObservationPaperPainter`.
+* **`theme/app_theme.dart`**: Thiết lập `ThemeData` tổng thể với bộ font chữ `Be Vietnam Pro` kiểu Google Drive và hàm `AppTheme.getResponsiveFontSize(context, baseFontSize)` tự động co giãn cỡ chữ theo kích thước thiết bị.
+* **`utils/coordinate_converter.dart`**: Chứa các hàm toán học chuyển đổi tọa độ điểm chạm thực tế $(X, Y)$ trên trang giấy sang chỉ số dòng (`rowIndex`).
 
-#### C. Tầng `data/` (Quản lý Dữ liệu & Lưu trữ)
-Đảm nhận việc định nghĩa cấu trúc dữ liệu, lưu trữ nội bộ (Offline) và đồng bộ đám mây (Cloud):
+#### C. Tầng `data/` (Quản lý Dữ liệu RAM & Đồng bộ Google Drive)
+Đảm nhận định nghĩa cấu trúc dữ liệu JSON, lưu tạm tốc độ cao trên RAM và đồng bộ đám mây Google Drive:
 * **`models/`**:
-  * **`notebook_model.dart`**: Đối tượng đại diện cho một cuốn vở (gồm `id`, `title`, `paperTemplate`, `createdAt`, `updatedAt`, và danh sách các trang).
-  * **`page_model.dart`**: Đối tượng đại diện cho một trang giấy cụ thể trong cuốn vở (gồm `pageNumber`, `paperTemplate` riêng nếu có, và danh sách ` List<LineModel>`).
-  * **`line_model.dart`**: Lưu nội dung văn bản của một dòng kẻ (`rowIndex`, chuỗi `text` đã được AI nhận diện, kiểu căn lề hoặc màu chữ).
-  * **`stroke_point_model.dart`**: Lưu tọa độ điểm của nét bút tạm thời (`x`, `y`, lực nhấn `pressure`, thời gian `timestamp`) phục vụ cho việc dựng nét mực mượt và gửi sang bộ nhận diện ML Kit.
+  * **`notebook_model.dart`**: Đại diện cho một tệp ghi chú / sổ dự giờ (`id`, `title`, `paperTemplate` (`note5x`, `note4x`, `observation_blank_v1`...), `createdAt`, `updatedAt`, `pages`).
+  * **`page_model.dart`**: Đại diện cho một trang giấy trong vở (`pageNumber`, `paperTemplate`, và danh sách `List<LineModel> lines`).
+  * **`line_model.dart`**: Lưu nội dung văn bản của từng dòng kẻ ngang (`rowIndex`, chuỗi `text`).
+  * **`stroke_point_model.dart`**: Lưu tọa độ điểm của nét bút viết tay (`x`, `y`, `pressure`, `timestamp`) phục vụ vẽ mực thời gian thực và gửi sang Google ML Kit.
 * **`datasources/`**:
-  * **`local_storage_datasource.dart`**: Chỉ lưu tạm nội dung vở đang viết trực tiếp trên bộ nhớ RAM (`_ramCache`, tốc độ `0ms`), tuyệt đối không ghi nội dung vở xuống ổ cứng của máy.
-  * **`google_drive_datasource.dart`**: Giao tiếp với Google Drive REST API để lưu trữ và đồng bộ các file JSON trên Google Drive cá nhân của người dùng.
+  * **`local_storage_datasource.dart`**: Chỉ lưu tạm dữ liệu JSON của cuốn vở đang mở trực tiếp trên **bộ nhớ RAM (`_ramCache`, tốc độ `0ms`)**, tuyệt đối không ghi nội dung vở xuống ổ cứng của máy.
+  * **`google_drive_datasource.dart`**: Quản lý toàn bộ kết nối Google Drive API (`MeetingBook/Ghi_Chu` và `MeetingBook/So_Du_Gio`):
+    * Tự động làm mới Access Token khi gặp lỗi `401`.
+    * Điều hướng mở thư mục đa cấp ở cả 2 Tab (ngăn xếp `_notesFolderStack`, `_observationFolderStack`).
+    * Tạo thư mục mới (`createFolderInTab`), tạo tệp ghi chú `.json` (`createNoteFileInNotesTab`), tạo tệp sổ dự giờ `.json` (`createObservationFileInTab`), đọc nội dung `.json` (ưu tiên RAM hoặc tải mới từ Drive khi bấm **Làm mới**).
+    * Bộ 3 chức năng quản lý mục: **Đổi tên** (`renameItemInTab` chống trùng tên), **Xóa** (`deleteItemInTab` & `restoreDeletedItemInTab` hoàn tác xóa), và **Di chuyển dạng Cây thư mục** (`fetchFolderTreeForMove`, `moveItemInTab` & `undoMoveItemInTab` hoàn tác di chuyển).
 * **`repositories/`**:
-  * **`data_sync_repository.dart`**: Lớp trung gian quản lý lưu tức thì trên RAM (`local_storage_datasource`) và đồng bộ lên Google Drive (`google_drive_datasource`) ở 3 thời điểm vàng hoặc khi bấm nút Lưu.
+  * **`data_sync_repository.dart`**: Quản lý quy trình lưu tức thì trên RAM và đồng bộ lên Google Drive ở **3 thời điểm vàng** (sau 30 giây dừng thao tác, khi thoát trang vở, khi ẩn app/tắt màn hình) hoặc khi bấm nút **Lưu**; đồng thời lắng nghe `connectivity_plus` để khóa màn hình ngay khi rớt mạng hoặc lỗi RAM.
 
 #### D. Tầng `services/` (Các Dịch vụ Xử lý Chuyên biệt)
-Chứa các mô-đun xử lý kỹ thuật độc lập, không phụ thuộc vào trạng thái của Widget:
-* **`handwriting_recognition_service.dart`**: Quản lý vòng đời của `DigitalInkRecognizer` (Google ML Kit). Đảm nhận việc kiểm tra/tải model ngôn ngữ tiếng Việt (`vi`), nhận danh sách các nét vẽ (`List<StrokePointModel>`) và trả về chuỗi văn bản hoàn chỉnh.
-* **`pdf_export_service.dart`**: Sử dụng thư viện `pdf` để tái tạo lại chính xác hệ thống lưới ô ly (hoặc dòng kẻ ngang) và in từng dòng chữ (`LineModel`) lên trang PDF vector chuẩn A4 để xuất file hoặc in ấn.
-* **`stylus_input_filter.dart`**: Bộ lọc phần cứng giúp phân biệt tín hiệu từ Bút cảm ứng (`stylus`, `invertedStylus`) và Chuột (`mouse`) với cảm ứng ngón tay/bàn tay (`touch`), thực hiện cơ chế chống tì tay (Palm Rejection) khi viết.
+* **`handwriting_recognition_service.dart`**: Quản lý `DigitalInkRecognizer` của Google ML Kit (ngôn ngữ `vi` - Tiếng Việt), tự động kiểm tra/tải gói ngôn ngữ và nhận diện danh sách nét bút (`List<List<StrokePointModel>>`) thành chuỗi văn bản tiếng Việt.
+* **`stylus_input_filter.dart`**: Bộ lọc phần cứng phân biệt tín hiệu Bút cảm ứng (`stylus`, `invertedStylus`), Chuột (`mouse`) và Chạm (`touch`), tự động chặn cảm ứng tì tay khi đầu bút đang chạm màn hình.
+* **`pdf_export_service.dart`**: Dịch vụ xuất nội dung trang vở ra file `.pdf` chuẩn A4.
 
-#### E. Tầng `widgets/` & `features/` (Các Mô-đun Tính năng Giao diện & Điều khiển)
-* **`widgets/app_header_widget.dart`**: Widget Header dùng chung toàn ứng dụng, tích hợp ô tìm kiếm tự co giãn, nút Menu 3 gạch và thanh chuyển đổi Tab (`TabBar`).
-* **`features/home/` (Màn hình Home chính)**:
-  * **`service/home_service.dart`**: Chứa toàn bộ logic xử lý của màn hình Home (xác định chữ gợi ý tìm kiếm theo từng Tab, mở Bottom Sheet tương ứng với Tab đang chọn, xử lý tạo Ghi chú mới / Sổ dự giờ mới / Thêm thư mục mới).
-  * **`controllers/home_controller.dart`**: Quản lý trạng thái dữ liệu của màn hình Home.
-  * **`views/home_screen.dart`**: Giao diện khung chính kết nối Header, vùng nội dung `TabBarView`, nút nổi `+` và thanh Footer.
-  * **`views/widgets/create_item_bottom_sheet.dart`**: Giao diện Bottom Sheet trượt từ dưới lên (hỗ trợ vuốt tắt, nút `X` đóng bên phải, tràn full chiều ngang màn hình).
-* **`features/notes/` (Mô-đun Tab Ghi chú)**: Quản lý giao diện và chức năng riêng của danh sách Ghi chú / Nhật ký.
-* **`features/observation_book/` (Mô-đun Tab Sổ dự giờ)**: Quản lý giao diện và chức năng riêng của danh sách Sổ dự giờ.
+#### E. Tầng `widgets/` (Các Widget & Hộp thoại Dùng chung Toàn App)
+* **`app_header_widget.dart`**: Thanh Header dùng chung gồm ô tìm kiếm tự co giãn, nút thông tin User góc phải và thanh chuyển đổi 2 Tab (`Ghi chú`, `Sổ dự giờ`).
+* **`center_notification_dialog.dart`**: Hộp thoại thông báo ngắn gọn chính giữa màn hình (`Thành công` tích xanh lá / `Thất bại` chữ X đỏ), tích hợp nút **`Hoàn tác`** cho thao tác Xóa và Di chuyển.
+* **`create_folder_dialog.dart`**: Hộp thoại nhập tên tạo Thư mục mới (tối đa 150 ký tự, kiểm tra chống trùng tên).
+* **`create_note_dialog.dart`**: Hộp thoại tạo Tệp ghi chú mới (nhập tên tối đa 150 ký tự, chống trùng tên, chọn mẫu **Vở 5 ô ly** hoặc **Vở 4 ô ly**).
+* **`create_observation_book_dialog.dart`**: Hộp thoại tạo Tệp sổ dự giờ mới (nhập tên tối đa 150 ký tự, chống trùng tên, hiển thị các biểu mẫu Sổ dự giờ từ `observation_templates/` theo **dạng Danh sách (List)** kèm tên biểu mẫu).
+* **`drive_folder_section_widget.dart`**: Widget hiển thị danh sách Thư mục & Tệp theo chế độ **Lưới ô (2/4/6 cột)** hoặc **Danh sách**, kèm thanh điều hướng **Quay lại** thư mục cha, nút **Làm mới** và nút chữ **`i`** trên mỗi mục.
+* **`item_actions_bottom_sheet.dart`**: Bottom Sheet khi bấm nút **`i`** trên Tệp/Thư mục, cung cấp 3 chức năng: **Đổi tên** (kiểm tra trùng tên), **Xóa** (có nút Hoàn tác), và **Di chuyển** (hiển thị **Cây thư mục Google Drive** đóng/mở đa cấp kèm nút Hoàn tác).
+* **`network_lock_overlay_widget.dart`**: Lớp phủ khóa màn hình bảo vệ dữ liệu khi phát hiện mất mạng hoặc lỗi bộ nhớ tạm RAM.
+* **`user_profile_dialog.dart`**: Hộp thoại hiển thị ảnh đại diện, tên, Email Google Drive đang đăng nhập và nút **Đăng xuất**.
+
+#### F. Tầng `features/` (Các Mô-đun Màn hình Tính năng)
+* **`features/auth/`**:
+  * **`service/auth_service.dart`** & **`views/login_screen.dart`**: Kiểm tra mạng, đăng nhập tài khoản Google, cấp quyền Google Drive và đăng xuất.
+* **`features/home/`**:
+  * **`service/home_service.dart`**, **`controllers/home_controller.dart`**, **`views/home_screen.dart`** & **`views/widgets/create_item_bottom_sheet.dart`**: Quản lý màn hình chính, tìm kiếm theo Tab và mở Bottom Sheet tạo mới (Ghi chú mới, Sổ dự giờ mới, Thư mục mới) khi bấm nút `+`.
+* **`features/notes/`**:
+  * **`views/notes_screen.dart`**: Hiển thị cây thư mục và các tệp ghi chú trong Tab Ghi chú; bấm vào thư mục để đi sâu vào trong, bấm vào tệp để mở trang vở.
+  * **`views/note_editor_screen.dart`**: Màn hình soạn thảo trang vở & biểu mẫu thông minh:
+    * Menu chọn chế độ: **Bàn phím** (hỗ trợ gõ Tiếng Việt kiểu Telex tích hợp sẵn), **Viết bút**, **Chỉ xem** (tiết kiệm API, chặn chỉnh sửa nhưng vẫn cho phép Zoom/cuộn trang), và **Làm mới** (tải lại JSON mới nhất từ Drive).
+    * Hiển thị **con trỏ dọc `|` kèm nút nắm tròn** trên dòng đang chọn để người dùng chạm hoặc kéo ngang con trỏ đến vị trí cần thêm/sửa chữ.
+    * Tự động nối dòng, ngắt từ xuống dòng như Microsoft Word và tự dàn lại chữ khi xoay ngang/dọc màn hình.
+  * **`views/widgets/pen_handwriting_pad_widget.dart`**: Bảng giấy viết tay ở nửa dưới màn hình (cách ly bằng `RepaintBoundary` + `ValueNotifier` đạt 60–120fps không lag): viết liên tục tự nối chữ, dừng 1 nhịp (`650ms`) tự cách khoảng trắng, hiển thị nét mực và tự làm mờ nét vẽ sau khi đẩy chữ lên dòng kẻ.
+* **`features/observation_book/`**:
+  * **`views/observation_book_screen.dart`** & **`controllers/observation_book_controller.dart`**: Quản lý cây thư mục và các tệp Sổ dự giờ (`.json`) trong Tab Sổ dự giờ (`MeetingBook/So_Du_Gio`); bấm vào thư mục để mở vào trong, bấm vào tệp sổ dự giờ để mở màn hình biểu mẫu soạn thảo.
 
 ---
 
-## 5. Các lệnh Khởi tạo Nhanh (Dùng trong Git Bash / Terminal)
+## 5. Các lệnh Khởi tạo Nhanh & Danh sách Thư viện
 
-### 5.1. Lệnh tạo tự động toàn bộ cây thư mục và file rỗng
-Chạy lệnh sau tại thư mục gốc của project Flutter:
+### 5.1. Lệnh tạo tự động toàn bộ cây thư mục và file của dự án
+Chạy lệnh sau tại thư mục gốc của project Flutter (Git Bash):
 
 ```bash
-mkdir -p lib/core/{constants,theme,utils} \
+mkdir -p lib/core/constants/{note_templates,observation_templates} \
+         lib/core/{theme,utils} \
          lib/data/{models,datasources,repositories} \
          lib/services \
-         lib/features/library/{controllers,views/widgets} \
-         lib/features/notebook_editor/{controllers,views/{painters,widgets}} && \
+         lib/widgets \
+         lib/features/auth/{service,views} \
+         lib/features/home/{controllers,service,views/widgets} \
+         lib/features/notes/{controllers,views/widgets} \
+         lib/features/observation_book/{controllers,views} && \
 touch lib/app.dart \
-      lib/core/constants/{paper_dimensions.dart,app_colors.dart} \
+      lib/core/constants/app_colors.dart \
+      lib/core/constants/note_templates/{note5x.dart,note4x.dart} \
+      lib/core/constants/observation_templates/{primary_school_evaluation_template.dart,blank_observation_template.dart} \
+      lib/core/theme/app_theme.dart \
       lib/core/utils/coordinate_converter.dart \
       lib/data/models/{notebook_model.dart,page_model.dart,line_model.dart,stroke_point_model.dart} \
+      lib/data/datasources/{local_storage_datasource.dart,google_drive_datasource.dart} \
+      lib/data/repositories/data_sync_repository.dart \
       lib/services/{handwriting_recognition_service.dart,pdf_export_service.dart,stylus_input_filter.dart} \
-      lib/features/notebook_editor/controllers/{editor_controller.dart,ink_canvas_controller.dart} \
-      lib/features/notebook_editor/views/notebook_editor_screen.dart \
-      lib/features/notebook_editor/views/painters/{oly_grid_painter.dart,active_ink_painter.dart} \
-      lib/features/notebook_editor/views/widgets/{page_sheet_widget.dart,editor_toolbar_widget.dart}
+      lib/widgets/{app_header_widget.dart,center_notification_dialog.dart,create_folder_dialog.dart,create_note_dialog.dart,create_observation_book_dialog.dart,drive_folder_section_widget.dart,item_actions_bottom_sheet.dart,network_lock_overlay_widget.dart,user_profile_dialog.dart} \
+      lib/features/auth/service/auth_service.dart \
+      lib/features/auth/views/login_screen.dart \
+      lib/features/home/controllers/home_controller.dart \
+      lib/features/home/service/home_service.dart \
+      lib/features/home/views/home_screen.dart \
+      lib/features/home/views/widgets/create_item_bottom_sheet.dart \
+      lib/features/notes/controllers/notes_controller.dart \
+      lib/features/notes/views/{notes_screen.dart,note_editor_screen.dart} \
+      lib/features/notes/views/widgets/pen_handwriting_pad_widget.dart \
+      lib/features/observation_book/controllers/observation_book_controller.dart \
+      lib/features/observation_book/views/observation_book_screen.dart
 ```
 
 ### 5.2. Danh sách các Thư viện (Packages) sử dụng trong Dự án & Lệnh cài đặt
 
-#### A. Các thư viện đã cài đặt và đang sử dụng:
-* **`google_fonts`**: Cung cấp bộ font chữ chuẩn Google Drive (`Be Vietnam Pro`) hỗ trợ tiếng Việt và chữ viết tay.
-* **`google_sign_in` (`^6.2.2`)**: Xác thực và đăng nhập tài khoản Google trên thiết bị Android.
-* **`googleapis`**: Cung cấp bộ thư viện `DriveApi` (`v3`) để tạo thư mục, tải lên và ghi đè file JSON trên Google Drive cá nhân.
-* **`http`**: Tạo `GoogleAuthClient` đính kèm mã xác thực OAuth vào các yêu cầu gọi Google Drive REST API.
-* **`shared_preferences`**: Lưu trạng thái duy trì đăng nhập (`is_logged_in`, `user_email`, `user_display_name`, `user_photo_url`) trên máy cho đến khi người dùng bấm Đăng xuất.
-* **`connectivity_plus`**: Kiểm tra trạng thái kết nối mạng (Wi-Fi / Dữ liệu di động) khi đăng nhập và theo dõi đứt mạng giữa chừng để khóa thao tác bảo vệ dữ liệu.
+#### A. Các thư viện đã cài đặt và đang chạy trong `pubspec.yaml`:
+* **`google_fonts` (`^8.2.1`)**: Cung cấp bộ font chữ chuẩn Google Drive (`Be Vietnam Pro`) hỗ trợ tiếng Việt.
+* **`google_sign_in` (`6.2.2`)**: Xác thực và đăng nhập tài khoản Google trên thiết bị Android.
+* **`googleapis` (`^17.0.0`)**: Cung cấp bộ thư viện `DriveApi` (`v3`) để quản lý cây thư mục, tải lên và ghi đè file JSON trên Google Drive cá nhân.
+* **`http` (`^1.6.0`)**: Tạo `GoogleAuthClient` đính kèm mã xác thực OAuth vào các yêu cầu gọi Google Drive REST API.
+* **`shared_preferences` (`^2.5.6`)**: Chỉ dùng để lưu trạng thái duy trì phiên đăng nhập Gmail (`is_logged_in`, `user_email`, `user_display_name`, `user_photo_url`) và ID thư mục gốc.
+* **`connectivity_plus` (`^7.3.2`)**: Kiểm tra trạng thái kết nối mạng khi đăng nhập và theo dõi đứt mạng giữa chừng để khóa thao tác bảo vệ dữ liệu.
+* **`google_mlkit_digital_ink_recognition` (`^0.16.1`)**: AI trên thiết bị (On-Device) chuyển nét vẽ viết tay trên bảng viết bút thành văn bản tiếng Việt (`vi`).
 
 ```bash
-flutter pub add google_fonts "google_sign_in:^6.2.2" googleapis http shared_preferences connectivity_plus
+flutter pub add google_fonts "google_sign_in:6.2.2" googleapis http shared_preferences connectivity_plus google_mlkit_digital_ink_recognition
 ```
 
-#### B. Các thư viện phục vụ Viết bút cảm ứng, AI Nhận diện & Xuất PDF (Cài đặt ở giai đoạn làm trang vở):
-* **`google_mlkit_digital_ink_recognition`**: AI trên thiết bị (On-Device) chuyển nét vẽ viết tay thành văn bản tiếng Việt.
-* **`perfect_freehand`**: Nội suy nét mực mượt mà theo lực nhấn của bút cảm ứng (Stylus).
-* **`pdf` & `printing`**: Vẽ lại lưới ô ly và xuất trang vở ra file `.pdf` vector chuẩn A4.
-* **`path_provider`**: Truy xuất đường dẫn bộ nhớ đệm tạm thời trên thiết bị.
+#### B. Các thư viện bổ sung cho giai đoạn Xuất file PDF:
+* **`pdf` & `printing`**: Vẽ lại dòng kẻ vở và xuất trang vở ra file `.pdf` vector chuẩn A4.
+* **`path_provider`**: Truy xuất đường dẫn bộ nhớ đệm tạm thời khi xuất file.
 
 ```bash
-flutter pub add google_mlkit_digital_ink_recognition perfect_freehand pdf printing path_provider
+flutter pub add pdf printing path_provider
 ```
 
 ---
 
-## 6. Lộ trình Triển khai Đề xuất (5 Giai đoạn)
-1. **Giai đoạn 1 (UI Nền tảng):** Viết `paper_dimensions.dart` và `oly_grid_painter.dart` để hiển thị mặt giấy kẻ ô ly chuẩn tỷ lệ A4 lên máy ảo Xiaomi Pad 8.
-2. **Giai đoạn 2 (Bút cảm ứng & Nét vẽ):** Viết `stylus_input_filter.dart` và `active_ink_painter.dart` để dùng chuột/bút vẽ nét mực mượt lên dòng kẻ và tính chính xác `rowIndex` nơi bút đang chạm.
-3. **Giai đoạn 3 (Tích hợp AI Nhận diện chữ):** Kết nối `handwriting_recognition_service.dart` với bộ đếm `Debounce 600ms` để biến nét vẽ thành văn bản tiếng Việt và điền tự động vào dòng kẻ.
-4. **Giai đoạn 4 (Phân trang & Lưu trữ):** Hoàn thiện `editor_controller.dart` để tự động đẩy chữ tràn sang dòng/trang mới và lưu toàn bộ cuốn vở thành file JSON trong bộ nhớ máy.
-5. **Giai đoạn 5 (Xuất PDF & Đồng bộ Google Drive):** Hoàn thiện `pdf_export_service.dart` để xuất file PDF có kèm lưới ô ly và sao lưu tự động lên Google Drive.
+## 6. Lộ trình Triển khai Dự án (5 Giai đoạn)
+1. **Giai đoạn 1 (Đăng nhập & Cây thư mục Google Drive):** Hoàn thiện `login_screen.dart`, `auth_service.dart`, `google_drive_datasource.dart`, `home_screen.dart`, `drive_folder_section_widget.dart` và `item_actions_bottom_sheet.dart` (Tạo mới, Đổi tên chống trùng, Xóa có hoàn tác, Di chuyển dạng Cây thư mục có hoàn tác).
+2. **Giai đoạn 2 (Giao diện Trang giấy 5 ô ly / 4 ô ly & Soạn thảo như Word):** Hoàn thiện `note5x.dart`, `note4x.dart` và `note_editor_screen.dart` để hiển thị mặt giấy kẻ ngang tự co giãn, hỗ trợ gõ Bàn phím Telex, tự xuống dòng/nối dòng và Chế độ Chỉ xem.
+3. **Giai đoạn 3 (Bảng viết Bút cảm ứng & AI Nhận diện chữ viết tay):** Hoàn thiện `pen_handwriting_pad_widget.dart`, `stylus_input_filter.dart` và `handwriting_recognition_service.dart` (Google ML Kit Digital Ink `vi`) để viết nét mực mượt 60–120fps, tự nối chữ/cách từ và trỏ/kéo con trỏ thêm chữ bù vào bất kỳ vị trí nào trên câu.
+4. **Giai đoạn 4 (Đồng bộ RAM 0ms $\rightarrow$ Google Drive):** Hoàn thiện `local_storage_datasource.dart` (chỉ lưu trên RAM `_ramCache`) và `data_sync_repository.dart` (đồng bộ ở 3 thời điểm vàng, nút Lưu thủ công và khóa màn hình khi mất mạng).
+5. **Giai đoạn 5 (Sổ dự giờ & Xuất PDF):** Mở rộng mô-đun `observation_book_screen.dart` và hoàn thiện `pdf_export_service.dart` để xuất trang vở ra file PDF chuẩn A4.
 
 ---
 

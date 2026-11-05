@@ -4,7 +4,7 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import '../../core/constants/note5x.dart';
+import '../../core/constants/note_templates/note5x.dart';
 import '../models/notebook_model.dart';
 import 'local_storage_datasource.dart';
 
@@ -166,6 +166,16 @@ class GoogleDriveDatasource {
     final String subPath =
         _notesFolderStack.map((f) => f.displayName).join(' / ');
     return 'MeetingBook / Ghi_Chu / $subPath';
+  }
+
+  /// Đường dẫn hiển thị hiện tại của Tab Sổ dự giờ (hỗ trợ hiển thị nhiều cấp thư mục)
+  String get currentObservationPathLabel {
+    if (_observationFolderStack.isEmpty) {
+      return 'MeetingBook / So_Du_Gio';
+    }
+    final String subPath =
+        _observationFolderStack.map((f) => f.displayName).join(' / ');
+    return 'MeetingBook / So_Du_Gio / $subPath';
   }
 
   // ===========================================================================
@@ -671,6 +681,93 @@ class GoogleDriveDatasource {
       currentItems.insert(firstFileIndex, newFileItem);
     }
     notesFoldersNotifier.value = currentItems;
+
+    return (fileItem: newFileItem, notebook: syncedNotebook);
+  }
+
+  // ===========================================================================
+  // 8B. HÀM TẠO FILE SỔ DỰ GIỜ JSON MỚI (Ở MÀN HÌNH CHÍNH HOẶC TRONG THƯ MỤC ĐÃ CHỌN)
+  // Công dụng:
+  // - Cho phép tạo file sổ dự giờ (.json) ở ngoài màn hình chính (MeetingBook/So_Du_Gio)
+  //   hoặc bên trong thư mục đang mở (MeetingBook/So_Du_Gio/<Tên thư mục>).
+  // - Lưu mã định dạng biểu mẫu sổ dự giờ đã chọn vào cấu trúc JSON và appProperties trên Google Drive.
+  // ===========================================================================
+  Future<({DriveFolderItem fileItem, NotebookModel notebook})>
+      createObservationFileInTab({
+    required String fileName,
+    required String paperTemplate,
+  }) async {
+    await ensureAppFolderStructure();
+
+    final String cleanBaseName = fileName.trim().endsWith('.json')
+        ? fileName.trim().substring(0, fileName.trim().length - 5)
+        : fileName.trim();
+
+    // Xác định vị trí lưu: Nếu đang mở 1 thư mục con trong Tab Sổ dự giờ thì lưu vào thư mục đó, ngược lại lưu ở gốc So_Du_Gio
+    final String targetParentId =
+        activeObservationFolderNotifier.value?.id ?? _observationTabFolderId!;
+
+    // Kiểm tra nhanh trùng tên file ngay trên danh sách hiện tại của Tab Sổ dự giờ
+    final bool existsInRam = observationFoldersNotifier.value.any(
+      (item) =>
+          !item.isFolder &&
+          item.displayName.trim().toLowerCase() == cleanBaseName.toLowerCase(),
+    );
+    if (existsInRam) {
+      throw DuplicateDriveItemException(
+        'Tên tệp "$cleanBaseName" đã tồn tại! Vui lòng đặt tên khác.',
+      );
+    }
+
+    // Khởi tạo dữ liệu JSON ban đầu cho file Sổ dự giờ với biểu mẫu đã chọn
+    final String tempDocId =
+        'observation_${DateTime.now().millisecondsSinceEpoch}';
+    final NotebookModel initialNotebook = NotebookModel.createInitial(
+      id: tempDocId,
+      title: cleanBaseName,
+      paperTemplate: paperTemplate,
+    );
+
+    // Đẩy file .json lên Google Drive (có kiểm tra chống trùng tên trên Drive)
+    final String createdDriveFileId = await uploadOrOverwriteJsonFile(
+      tabIndex: 1,
+      customParentFolderId: targetParentId,
+      fileName: cleanBaseName,
+      jsonData: initialNotebook.toJson(),
+      checkDuplicateOnCreate: true,
+      paperTemplate: paperTemplate,
+    );
+
+    // Đồng bộ ID thực tế của Google Drive vào NotebookModel và lưu vào RAM
+    final NotebookModel syncedNotebook = initialNotebook.copyWith(
+      id: createdDriveFileId,
+    );
+    await LocalStorageDatasource.instance.saveToRamAndLocalBuffer(
+      documentId: createdDriveFileId,
+      jsonData: syncedNotebook.toJson(),
+    );
+    await LocalStorageDatasource.instance.markSyncedToDrive(createdDriveFileId);
+
+    final DriveFolderItem newFileItem = DriveFolderItem(
+      id: createdDriveFileId,
+      name: '$cleanBaseName.json',
+      createdTime: DateTime.now(),
+      isFolder: false,
+      parentFolderId: targetParentId,
+      paperTemplate: paperTemplate,
+    );
+
+    // Đưa file sổ dự giờ mới vào danh sách hiển thị (nằm ngay sau nhóm thư mục)
+    final currentItems =
+        List<DriveFolderItem>.from(observationFoldersNotifier.value);
+    final int firstFileIndex =
+        currentItems.indexWhere((element) => !element.isFolder);
+    if (firstFileIndex == -1) {
+      currentItems.add(newFileItem);
+    } else {
+      currentItems.insert(firstFileIndex, newFileItem);
+    }
+    observationFoldersNotifier.value = currentItems;
 
     return (fileItem: newFileItem, notebook: syncedNotebook);
   }

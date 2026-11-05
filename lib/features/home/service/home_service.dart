@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../../data/datasources/google_drive_datasource.dart';
 import '../../../widgets/create_folder_dialog.dart';
 import '../../../widgets/create_note_dialog.dart';
+import '../../../widgets/create_observation_book_dialog.dart';
 import '../../../widgets/user_profile_dialog.dart';
 import '../../auth/service/auth_service.dart';
 import '../views/widgets/create_item_bottom_sheet.dart';
@@ -84,9 +85,22 @@ class HomeService {
     );
   }
 
-  /// Xử lý logic khi bấm "Tạo sổ dự giờ mới" (ở Tab Sổ dự giờ)
+  // ===========================================================================
+  // HÀM XỬ LÝ TẠO SỔ DỰ GIỜ MỚI TRONG TAB SỔ DỰ GIỜ (NGOÀI MÀN HÌNH CHÍNH HOẶC TRONG THƯ MỤC)
+  // - Cho phép đặt tên sổ dự giờ (tối đa 150 ký tự, chống trùng tên).
+  // - Cho phép chọn biểu mẫu sổ dự giờ theo dạng Danh sách (List) với tên biểu mẫu.
+  // - Sau khi tạo thành công -> Mở ngay giao diện trang biểu mẫu để render dữ liệu JSON.
+  // ===========================================================================
   void handleCreateObservationBook(BuildContext context) {
-    // Logic tạo sổ dự giờ mới sẽ được triển khai tại đây
+    showCreateObservationBookDialog(
+      context: context,
+      onConfirmCreateObservationBook: (fileName, paperTemplate) async {
+        return _driveDatasource.createObservationFileInTab(
+          fileName: fileName,
+          paperTemplate: paperTemplate,
+        );
+      },
+    );
   }
 
   // ===========================================================================

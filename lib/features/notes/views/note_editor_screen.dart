@@ -2,8 +2,10 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../../core/constants/app_colors.dart';
-import '../../../core/constants/note4x.dart';
-import '../../../core/constants/note5x.dart';
+import '../../../core/constants/note_templates/note4x.dart';
+import '../../../core/constants/note_templates/note5x.dart';
+import '../../../core/constants/observation_templates/blank_observation_template.dart';
+import '../../../core/constants/observation_templates/primary_school_evaluation_template.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/datasources/google_drive_datasource.dart';
 import '../../../data/models/line_model.dart';
@@ -52,11 +54,13 @@ enum NoteInputMode {
 class NoteEditorScreen extends StatefulWidget {
   final DriveFolderItem fileItem;
   final NotebookModel? initialNotebook;
+  final int tabIndex;
 
   const NoteEditorScreen({
     super.key,
     required this.fileItem,
     this.initialNotebook,
+    this.tabIndex = 0,
   });
 
   @override
@@ -115,12 +119,41 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   static const double _zoomStep = 0.25;
   double _zoomScale = 1.0;
 
+  /// Mã định danh biểu mẫu / mẫu giấy hiện tại của tệp
+  String get _activeTemplateId =>
+      _notebook?.paperTemplate ?? widget.fileItem.paperTemplate;
+
+  /// Kiểm tra xem tệp đang mở có phải là "Phiếu đánh giá tiết dạy giáo viên cấp Tiểu học" không
+  bool get _isPrimaryEvalTemplate =>
+      _activeTemplateId == PrimarySchoolEvaluationTemplate.templateId;
+
+  /// Lấy giới hạn dòng đầu - dòng cuối của vùng chứa `rowIndex`
+  ({int minRow, int maxRow, bool isSingleLine}) _getRowSectionBounds(
+    int rowIndex,
+  ) {
+    if (_isPrimaryEvalTemplate) {
+      return PrimarySchoolEvaluationTemplate.getSectionBoundsForRow(rowIndex);
+    }
+    return (
+      minRow: 0,
+      maxRow: 999999,
+      isSingleLine: false,
+    );
+  }
+
+  /// Kiểm tra xem `rowIndex` có cần ký tự neo `_kZeroWidthSpace` ở đầu dòng để bắt phím Backspace không
+  bool _rowUsesBackspaceSentinel(int rowIndex) {
+    final bounds = _getRowSectionBounds(rowIndex);
+    if (bounds.isSingleLine) return false;
+    return rowIndex > bounds.minRow;
+  }
+
   /// Loại bỏ ký tự ẩn Zero-Width Space để lấy chuỗi văn bản thực tế
   String _cleanText(String rawText) {
     return rawText.replaceAll(_kZeroWidthSpace, '');
   }
 
-  /// Đặt văn bản cho dòng `rowIndex` kèm ký tự neo `_kZeroWidthSpace` (nếu `rowIndex > 0`) để bắt phím Backspace
+  /// Đặt văn bản cho dòng `rowIndex` kèm ký tự neo `_kZeroWidthSpace` (nếu không phải dòng đầu vùng) để bắt phím Backspace
   void _setRowCleanText(
     int rowIndex,
     String cleanText, {
@@ -130,7 +163,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     final TextEditingController controller = _getOrCreateRowController(rowIndex);
     _lastCleanRowTexts[rowIndex] = cleanText;
 
-    if (rowIndex == 0) {
+    if (!_rowUsesBackspaceSentinel(rowIndex)) {
       final int safeOffset =
           (cursorCleanOffset ?? cleanText.length).clamp(0, cleanText.length);
       controller.value = TextEditingValue(
@@ -342,7 +375,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       () {
         final node = FocusNode(
           onKeyEvent: (FocusNode focusNode, KeyEvent event) {
-            if (_isViewOnlyMode || rowIndex <= 0) {
+            if (_isViewOnlyMode || !_rowUsesBackspaceSentinel(rowIndex)) {
               return KeyEventResult.ignored;
             }
             if ((event is KeyDownEvent || event is KeyRepeatEvent) &&
@@ -372,7 +405,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
             return;
           }
           if (node.hasFocus && (_isKeyboardMode || _isPenMode) && mounted) {
-            if (rowIndex > 0) {
+            if (_rowUsesBackspaceSentinel(rowIndex)) {
               final TextEditingController ctrl =
                   _getOrCreateRowController(rowIndex);
               if (!ctrl.text.startsWith(_kZeroWidthSpace)) {
@@ -413,7 +446,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       return clean.length;
     }
     final int cleanOffset =
-        (rowIndex > 0 && raw.startsWith(_kZeroWidthSpace))
+        (_rowUsesBackspaceSentinel(rowIndex) && raw.startsWith(_kZeroWidthSpace))
             ? rawOffset - 1
             : rawOffset;
     return cleanOffset.clamp(0, clean.length);
@@ -489,7 +522,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       rowIndex,
       clean,
       cursorCleanOffset: targetCleanOffset,
-      forceSentinel: rowIndex > 0,
+      forceSentinel: _rowUsesBackspaceSentinel(rowIndex),
     );
 
     setState(() {
@@ -605,7 +638,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     }
   }
 
-  /// Xử lý khi người dùng xóa hết chữ ở dòng `rowIndex` (> 0) hoặc bấm Xóa ở đầu dòng:
+  /// Xử lý khi người dùng xóa hết chữ ở dòng `rowIndex` hoặc bấm Xóa ở đầu dòng:
   /// Tự động nhảy con trỏ ngược lên cuối dòng phía trên (`rowIndex - 1`) và dồn các dòng dưới lên
   void _jumpOrMergeToPreviousRow({
     required int rowIndex,
@@ -614,7 +647,8 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     TextStyle? rowTextStyle,
     double? rowHeight,
   }) {
-    if (rowIndex <= 0) return;
+    final bounds = _getRowSectionBounds(rowIndex);
+    if (bounds.isSingleLine || rowIndex <= bounds.minRow) return;
 
     _isWrappingLine = true;
     try {
@@ -622,10 +656,12 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       final String prevClean =
           _cleanText(_getOrCreateRowController(prevRow).text);
 
-      // Dịch chuyển các dòng phía dưới `rowIndex` lên 1 bậc nếu dòng `rowIndex` bị xóa trống
-      final int maxRowIdx = _rowControllers.keys.isEmpty
-          ? rowIndex
-          : _rowControllers.keys.reduce(math.max);
+      // Dịch chuyển các dòng phía dưới `rowIndex` lên 1 bậc trong cùng vùng nếu dòng `rowIndex` bị xóa trống
+      final int maxRowIdx = _isPrimaryEvalTemplate
+          ? bounds.maxRow
+          : (_rowControllers.keys.isEmpty
+              ? rowIndex
+              : _rowControllers.keys.reduce(math.max));
 
       if (remainingCleanOnCurrentRow.isEmpty) {
         for (int r = rowIndex; r < maxRowIdx; r++) {
@@ -640,7 +676,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
           prevRow,
           prevClean,
           cursorCleanOffset: targetCursorCleanOffset,
-          forceSentinel: prevRow > 0,
+          forceSentinel: _rowUsesBackspaceSentinel(prevRow),
         );
 
         if (_selectedRowIndex != prevRow) {
@@ -656,9 +692,9 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
           prevRow,
           prevClean,
           cursorCleanOffset: targetCursorCleanOffset,
-          forceSentinel: prevRow > 0,
+          forceSentinel: _rowUsesBackspaceSentinel(prevRow),
         );
-        if (rowHeight != null) {
+        if (rowHeight != null && !_isPrimaryEvalTemplate) {
           _ensureRowVisible(prevRow, rowHeight);
         }
       } else {
@@ -679,7 +715,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
           prevRow,
           mergedText,
           cursorCleanOffset: joinCursorCleanOffset,
-          forceSentinel: prevRow > 0,
+          forceSentinel: _rowUsesBackspaceSentinel(prevRow),
         );
 
         if (maxLineTextWidth != null &&
@@ -706,7 +742,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
             prevRow,
             _cleanText(_getOrCreateRowController(prevRow).text),
             cursorCleanOffset: joinCursorCleanOffset,
-            forceSentinel: prevRow > 0,
+            forceSentinel: _rowUsesBackspaceSentinel(prevRow),
           );
         }
       }
@@ -727,11 +763,17 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     int? keepFocusOnRow,
     int? keepCursorCleanOffset,
   }) {
+    final bounds = _getRowSectionBounds(startRowIndex);
+    if (bounds.isSingleLine) return;
+
     int currentRow = startRowIndex;
     int? targetFocusRow = keepFocusOnRow;
     int targetCursorCleanOffset = keepCursorCleanOffset ?? 0;
 
     while (true) {
+      if (currentRow >= bounds.maxRow) {
+        break;
+      }
       final TextEditingController currentController =
           _getOrCreateRowController(currentRow);
       final String currentClean = _cleanText(currentController.text);
@@ -822,9 +864,11 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         focusRow,
         focusClean,
         cursorCleanOffset: cursorCleanOffset.clamp(0, focusClean.length),
-        forceSentinel: focusRow > 0,
+        forceSentinel: _rowUsesBackspaceSentinel(focusRow),
       );
-      _ensureRowVisible(focusRow, rowHeight);
+      if (!_isPrimaryEvalTemplate) {
+        _ensureRowVisible(focusRow, rowHeight);
+      }
     }
   }
 
@@ -946,13 +990,15 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       return;
     }
 
+    final bounds = _getRowSectionBounds(rowIndex);
+    final bool usesSentinel = _rowUsesBackspaceSentinel(rowIndex);
     final String prevClean = _lastCleanRowTexts[rowIndex] ?? '';
     final String currentClean = _cleanText(rawNewText);
 
-    // 1. Kiểm tra nếu người dùng bấm Xóa (Backspace) ở dòng > 0:
+    // 1. Kiểm tra nếu người dùng bấm Xóa (Backspace) ở dòng có ký tự neo:
     // - Hoặc đã xóa mất ký tự neo `_kZeroWidthSpace` ở đầu dòng
     // - Hoặc vừa xóa hết ký tự cuối cùng của dòng (`prevClean` có chữ -> `currentClean` rỗng)
-    if (rowIndex > 0) {
+    if (usesSentinel) {
       final bool deletedLeadingSentinel =
           !rawNewText.startsWith(_kZeroWidthSpace);
       final bool emptiedCurrentRow =
@@ -973,62 +1019,136 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
 
     _lastCleanRowTexts[rowIndex] = currentClean;
 
-    // 2. Nếu người dùng xóa bớt ký tự trên dòng hiện tại mà dòng kế tiếp (`rowIndex + 1`) đang có chữ:
-    // Tự động kéo chữ từ dòng dưới lên để lấp đầy chiều ngang như Word
-    if (currentClean.length < prevClean.length) {
-      final String nextClean =
-          _cleanText(_rowControllers[rowIndex + 1]?.text ?? '');
-      if (nextClean.isNotEmpty &&
-          _measureTextWidth(currentClean, rowTextStyle) < maxLineTextWidth) {
+    // Nếu đang nhập điểm tiêu chí (500 -> 511) trên Phiếu đánh giá tiết dạy Tiểu học:
+    // Kiểm tra không vượt quá điểm tối đa, tự động cộng Tổng điểm và tự động xét loại tiết dạy
+    if (_isPrimaryEvalTemplate &&
+        PrimarySchoolEvaluationTemplate.isScoreRow(rowIndex)) {
+      _handlePrimaryEvalScoreUpdated(rowIndex, currentClean);
+      await _saveLinesToRamAndScheduleDriveSync();
+      return;
+    }
+
+    if (!bounds.isSingleLine) {
+      // 2. Nếu người dùng xóa bớt ký tự trên dòng hiện tại mà dòng kế tiếp (`rowIndex + 1`) trong cùng vùng đang có chữ:
+      // Tự động kéo chữ từ dòng dưới lên để lấp đầy chiều ngang như Word
+      if (currentClean.length < prevClean.length && rowIndex < bounds.maxRow) {
+        final String nextClean =
+            _cleanText(_rowControllers[rowIndex + 1]?.text ?? '');
+        if (nextClean.isNotEmpty &&
+            _measureTextWidth(currentClean, rowTextStyle) < maxLineTextWidth) {
+          _isWrappingLine = true;
+          try {
+            final TextEditingController currCtrl =
+                _getOrCreateRowController(rowIndex);
+            final int rawOffset = currCtrl.selection.baseOffset;
+            final int cleanCursorOffset =
+                (usesSentinel ? rawOffset - 1 : rawOffset)
+                    .clamp(0, currentClean.length);
+
+            final String combined = '$currentClean$nextClean';
+            _setRowCleanText(rowIndex + 1, '');
+            _setRowCleanText(
+              rowIndex,
+              combined,
+              cursorCleanOffset: cleanCursorOffset,
+              forceSentinel: usesSentinel,
+            );
+            _wrapOverflowFromRow(
+              startRowIndex: rowIndex,
+              maxLineTextWidth: maxLineTextWidth,
+              rowTextStyle: rowTextStyle,
+              rowHeight: rowHeight,
+              keepFocusOnRow: rowIndex,
+              keepCursorCleanOffset: cleanCursorOffset,
+            );
+          } finally {
+            _isWrappingLine = false;
+          }
+          await _saveLinesToRamAndScheduleDriveSync();
+          return;
+        }
+      }
+
+      // 3. Nếu người dùng viết hết chiều ngang dòng/cột -> Tự động ngắt chữ chuyển xuống dòng tiếp theo trong vùng
+      if (rowIndex < bounds.maxRow &&
+          _measureTextWidth(currentClean, rowTextStyle) > maxLineTextWidth) {
         _isWrappingLine = true;
         try {
-          final TextEditingController currCtrl =
-              _getOrCreateRowController(rowIndex);
-          final int rawOffset = currCtrl.selection.baseOffset;
-          final int cleanCursorOffset =
-              (rowIndex > 0 ? rawOffset - 1 : rawOffset)
-                  .clamp(0, currentClean.length);
-
-          final String combined = '$currentClean$nextClean';
-          _setRowCleanText(rowIndex + 1, '');
-          _setRowCleanText(
-            rowIndex,
-            combined,
-            cursorCleanOffset: cleanCursorOffset,
-            forceSentinel: rowIndex > 0,
-          );
           _wrapOverflowFromRow(
             startRowIndex: rowIndex,
             maxLineTextWidth: maxLineTextWidth,
             rowTextStyle: rowTextStyle,
             rowHeight: rowHeight,
-            keepFocusOnRow: rowIndex,
-            keepCursorCleanOffset: cleanCursorOffset,
           );
         } finally {
           _isWrappingLine = false;
         }
-        await _saveLinesToRamAndScheduleDriveSync();
-        return;
-      }
-    }
-
-    // 3. Nếu người dùng viết hết chiều ngang giấy -> Tự động ngắt chữ chuyển xuống dòng tiếp theo
-    if (_measureTextWidth(currentClean, rowTextStyle) > maxLineTextWidth) {
-      _isWrappingLine = true;
-      try {
-        _wrapOverflowFromRow(
-          startRowIndex: rowIndex,
-          maxLineTextWidth: maxLineTextWidth,
-          rowTextStyle: rowTextStyle,
-          rowHeight: rowHeight,
-        );
-      } finally {
-        _isWrappingLine = false;
       }
     }
 
     await _saveLinesToRamAndScheduleDriveSync();
+  }
+
+  /// Tự động kiểm tra điểm tối đa, tính lại Tổng điểm và tự động điền Xếp loại tiết dạy khi nhập điểm tiêu chí
+  void _handlePrimaryEvalScoreUpdated(int scoreRowIndex, String currentClean) {
+    final int specIdx =
+        scoreRowIndex - PrimarySchoolEvaluationTemplate.scoreStartRow;
+    if (specIdx >= 0 &&
+        specIdx < PrimarySchoolEvaluationTemplate.criteriaList.length) {
+      final ObservationCriterionSpec spec =
+          PrimarySchoolEvaluationTemplate.criteriaList[specIdx];
+      final double? parsed =
+          PrimarySchoolEvaluationTemplate.parseScoreString(currentClean);
+      if (parsed != null && parsed > spec.maxScore) {
+        final String clampedStr =
+            PrimarySchoolEvaluationTemplate.formatScoreVi(spec.maxScore);
+        _isWrappingLine = true;
+        try {
+          _setRowCleanText(
+            scoreRowIndex,
+            clampedStr,
+            cursorCleanOffset: clampedStr.length,
+          );
+        } finally {
+          _isWrappingLine = false;
+        }
+      }
+    }
+
+    final eval = PrimarySchoolEvaluationTemplate.evaluateScores(
+      (int idx) => _cleanText(_rowControllers[idx]?.text ?? ''),
+    );
+
+    if (eval.suggestedRating != null) {
+      final String currentRating = _cleanText(
+        _rowControllers[PrimarySchoolEvaluationTemplate.rowEvaluatedRating]
+                ?.text ??
+            '',
+      ).trim();
+      const Set<String> autoRatings = <String>{
+        '',
+        'Giỏi',
+        'Khá',
+        'Trung bình',
+        'Chưa đạt',
+      };
+      if (autoRatings.contains(currentRating)) {
+        _isWrappingLine = true;
+        try {
+          _setRowCleanText(
+            PrimarySchoolEvaluationTemplate.rowEvaluatedRating,
+            eval.suggestedRating!,
+            cursorCleanOffset: eval.suggestedRating!.length,
+          );
+        } finally {
+          _isWrappingLine = false;
+        }
+      }
+    }
+
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   /// Đóng gói dữ liệu sạch của các dòng vào JSON (RAM 0ms + hẹn 30 giây đẩy lên Google Drive)
@@ -1077,7 +1197,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       await _syncRepository.onUserWritingChanged(
         documentId: widget.fileItem.id,
         fileName: widget.fileItem.displayName,
-        tabIndex: 0,
+        tabIndex: widget.tabIndex,
         parentFolderId: widget.fileItem.parentFolderId,
         existingDriveFileId: widget.fileItem.id,
         updatedJsonData: updatedNotebook.toJson(),
@@ -1130,9 +1250,11 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final String activeTemplate =
-        _notebook?.paperTemplate ?? widget.fileItem.paperTemplate;
+    final String activeTemplate = _activeTemplateId;
     final bool isNote4x = activeTemplate == Note4x.templateId;
+    final bool isObservationBlank =
+        activeTemplate == BlankObservationTemplate.templateId;
+    final bool isPrimaryEval = _isPrimaryEvalTemplate;
 
     final Size screenSize = MediaQuery.sizeOf(context);
     final double titleFontSize = AppTheme.getResponsiveFontSize(context, 16);
@@ -1141,9 +1263,15 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     // Chiều ngang trang giấy phụ thuộc vào màn hình máy và mức phóng to (_zoomScale):
     // - Nếu máy đủ to và ở 100%: hiển thị toàn bộ chiều ngang giấy.
     // - Nếu màn nhỏ hoặc đang phóng to (> 100%): hiện thêm con lăn trái/phải và cho phép giữ chuột kéo qua đủ chỗ.
-    final double paperWidth = isNote4x
-        ? Note4x.getResponsivePaperWidth(screenSize.width)
-        : Note5x.getResponsivePaperWidth(screenSize.width);
+    final double paperWidth = isPrimaryEval
+        ? PrimarySchoolEvaluationTemplate.getResponsivePaperWidth(
+            screenSize.width,
+          )
+        : (isObservationBlank
+            ? BlankObservationTemplate.getResponsivePaperWidth(screenSize.width)
+            : (isNote4x
+                ? Note4x.getResponsivePaperWidth(screenSize.width)
+                : Note5x.getResponsivePaperWidth(screenSize.width)));
     final double scaledPaperWidth = paperWidth * _zoomScale;
     final bool needsHorizontalScroll =
         scaledPaperWidth > screenSize.width + 1.0;
@@ -1159,9 +1287,11 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       child: Scaffold(
         // Cho phép màn hình co giãn mượt khi bàn phím hệ thống bật lên để bộ cuộn lướt bình thường
         resizeToAvoidBottomInset: true,
-        backgroundColor: isNote4x
-            ? Note4x.getPaperBackgroundColor()
-            : Note5x.getPaperBackgroundColor(),
+        backgroundColor: (isPrimaryEval || isObservationBlank)
+            ? BlankObservationTemplate.getPaperBackgroundColor()
+            : (isNote4x
+                ? Note4x.getPaperBackgroundColor()
+                : Note5x.getPaperBackgroundColor()),
         body: ValueListenableBuilder<bool>(
           valueListenable: _syncRepository.hasRamErrorNotifier,
           builder: (context, hasRamError, _) {
@@ -1367,12 +1497,14 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                   ),
                 ),
 
-                // 2. Vùng thân: Mặt giấy kẻ ngang có bộ cuộn lướt bình thường (Chặn thao tác ngay nếu có lỗi RAM)
+                // 2. Vùng thân: Mặt giấy kẻ ngang hoặc Biểu mẫu dự giờ có bộ cuộn lướt bình thường (Chặn thao tác ngay nếu có lỗi RAM)
                 Expanded(
                   child: IgnorePointer(
                     ignoring: hasRamError,
                     child: _buildPaperBody(
                       isNote4x: isNote4x,
+                      isObservationBlank: isObservationBlank,
+                      isPrimaryEval: isPrimaryEval,
                       hasRamError: hasRamError,
                     ),
                   ),
@@ -1516,10 +1648,12 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     );
   }
 
-  /// Xây dựng mặt giấy kẻ ngang có tích hợp bộ cuộn (`Scrollbar` + `SingleChildScrollView`)
+  /// Xây dựng mặt giấy kẻ ngang hoặc Biểu mẫu dự giờ 3 trang có tích hợp bộ cuộn (`Scrollbar` + `SingleChildScrollView`)
   /// và giới hạn chiều ngang viết tự động xuống dòng khi viết hết chiều ngang giấy
   Widget _buildPaperBody({
     required bool isNote4x,
+    required bool isObservationBlank,
+    required bool isPrimaryEval,
     required bool hasRamError,
   }) {
     if (_isLoadingJson) {
@@ -1567,28 +1701,45 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         // Tính chiều ngang trang giấy phụ thuộc vào màn hình máy:
         // - Màn hình đủ to: hiển thị toàn bộ chiều ngang giấy (paperWidth = constraints.maxWidth)
         // - Màn hình nhỏ: giữ chiều ngang giấy chuẩn (minPaperWidth) và cho phép kéo qua lại bằng con lăn
-        final double paperWidth = isNote4x
-            ? Note4x.getResponsivePaperWidth(constraints.maxWidth)
-            : Note5x.getResponsivePaperWidth(constraints.maxWidth);
+        final double paperWidth = isPrimaryEval
+            ? PrimarySchoolEvaluationTemplate.getResponsivePaperWidth(
+                constraints.maxWidth,
+              )
+            : (isObservationBlank
+                ? BlankObservationTemplate.getResponsivePaperWidth(
+                    constraints.maxWidth,
+                  )
+                : (isNote4x
+                    ? Note4x.getResponsivePaperWidth(constraints.maxWidth)
+                    : Note5x.getResponsivePaperWidth(constraints.maxWidth)));
         final double scaledPaperWidth = paperWidth * _zoomScale;
         final bool enableHorizontalScroll =
             scaledPaperWidth > constraints.maxWidth + 1.0;
         final bool isZoomedIn = _zoomScale > 1.01;
 
-        // Tính chiều cao mỗi dòng kẻ ngang dựa trên mẫu vở 5 ô ly (note5x) hoặc 4 ô ly (note4x)
-        final double rowHeight = isNote4x
-            ? Note4x.getResponsiveRowHeight(
+        // Tính chiều cao mỗi dòng kẻ ngang dựa trên mẫu vở 5 ô ly (note5x), 4 ô ly (note4x) hoặc biểu mẫu Sổ dự giờ
+        final double rowHeight = (isPrimaryEval || isObservationBlank)
+            ? BlankObservationTemplate.getResponsiveRowHeight(
                 context,
                 maxWidth: paperWidth,
               )
-            : Note5x.getResponsiveRowHeight(
-                context,
-                maxWidth: paperWidth,
-              );
+            : (isNote4x
+                ? Note4x.getResponsiveRowHeight(
+                    context,
+                    maxWidth: paperWidth,
+                  )
+                : Note5x.getResponsiveRowHeight(
+                    context,
+                    maxWidth: paperWidth,
+                  ));
 
-        final double horizontalPadding = isNote4x
-            ? Note4x.getResponsiveHorizontalPadding(paperWidth)
-            : Note5x.getResponsiveHorizontalPadding(paperWidth);
+        final double horizontalPadding = (isPrimaryEval || isObservationBlank)
+            ? BlankObservationTemplate.getResponsiveHorizontalPadding(
+                paperWidth,
+              )
+            : (isNote4x
+                ? Note4x.getResponsiveHorizontalPadding(paperWidth)
+                : Note5x.getResponsiveHorizontalPadding(paperWidth));
 
         // Chiều ngang vùng viết tối đa giữa 2 bên lề (căn đều 2 bên lề như Word)
         final double maxLineTextWidth = math.max(
@@ -1600,11 +1751,131 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         final TextStyle effectiveRowTextStyle =
             (Theme.of(context).textTheme.bodyMedium ?? const TextStyle())
                 .copyWith(
-          color: isNote4x ? Note4x.getTextColor() : Note5x.getTextColor(),
+          color: (isPrimaryEval || isObservationBlank)
+              ? BlankObservationTemplate.getTextColor()
+              : (isNote4x ? Note4x.getTextColor() : Note5x.getTextColor()),
           fontSize: lineFontSize,
           fontWeight: FontWeight.w500,
           height: 1.15,
         );
+
+        // Nếu đang mở biểu mẫu "Phiếu đánh giá tiết dạy giáo viên cấp Tiểu học" (3 trang):
+        // Render trực tiếp bố cục 3 trang biểu mẫu tương tác
+        if (isPrimaryEval) {
+          final Widget primaryFormContent = IgnorePointer(
+            ignoring: _isViewOnlyMode,
+            child: PrimarySchoolEvaluationFormWidget(
+              paperWidth: paperWidth,
+              rowHeight: rowHeight,
+              bodyTextStyle: effectiveRowTextStyle,
+              getRowCleanText: (int rIdx) =>
+                  _cleanText(_rowControllers[rIdx]?.text ?? ''),
+              onApplySuggestedRating: () {
+                final eval = PrimarySchoolEvaluationTemplate.evaluateScores(
+                  (int rIdx) => _cleanText(_rowControllers[rIdx]?.text ?? ''),
+                );
+                if (eval.suggestedRating != null) {
+                  _setRowCleanText(
+                    PrimarySchoolEvaluationTemplate.rowEvaluatedRating,
+                    eval.suggestedRating!,
+                    cursorCleanOffset: eval.suggestedRating!.length,
+                  );
+                  setState(() {});
+                  _saveLinesToRamAndScheduleDriveSync();
+                }
+              },
+              buildInteractiveField: ({
+                required int rowIndex,
+                required double width,
+                required double height,
+                required TextStyle textStyle,
+                double horizontalPadding = 6.0,
+                TextAlign textAlign = TextAlign.left,
+                String? hintText,
+                TextInputType? keyboardType,
+                double bottomContentPadding = 4.0,
+              }) {
+                return _buildInteractiveObservationField(
+                  rowIndex: rowIndex,
+                  width: width,
+                  height: height,
+                  textStyle: textStyle,
+                  hasRamError: hasRamError,
+                  horizontalPadding: horizontalPadding,
+                  textAlign: textAlign,
+                  hintText: hintText,
+                  keyboardType: keyboardType,
+                  bottomContentPadding: bottomContentPadding,
+                );
+              },
+            ),
+          );
+
+          final Widget zoomedFormWidget = isZoomedIn
+              ? SizedBox(
+                  width: scaledPaperWidth,
+                  child: FittedBox(
+                    fit: BoxFit.fitWidth,
+                    alignment: Alignment.topLeft,
+                    child: SizedBox(
+                      width: paperWidth,
+                      child: primaryFormContent,
+                    ),
+                  ),
+                )
+              : primaryFormContent;
+
+          final bool enableFree2DPan = isZoomedIn || enableHorizontalScroll;
+
+          return Scrollbar(
+            controller: _scrollController,
+            thumbVisibility: true,
+            interactive: true,
+            thickness: 6,
+            radius: const Radius.circular(8),
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onPanUpdate: enableFree2DPan
+                  ? (DragUpdateDetails details) {
+                      if (_scrollController.hasClients) {
+                        final double nextVert =
+                            (_scrollController.offset - details.delta.dy).clamp(
+                          0.0,
+                          _scrollController.position.maxScrollExtent,
+                        );
+                        _scrollController.jumpTo(nextVert);
+                      }
+                      if (_horizontalScrollController.hasClients) {
+                        final double nextHoriz =
+                            (_horizontalScrollController.offset -
+                                    details.delta.dx)
+                                .clamp(
+                          0.0,
+                          _horizontalScrollController.position.maxScrollExtent,
+                        );
+                        _horizontalScrollController.jumpTo(nextHoriz);
+                      }
+                    }
+                  : null,
+              child: SingleChildScrollView(
+                controller: _scrollController,
+                physics: enableFree2DPan
+                    ? const NeverScrollableScrollPhysics()
+                    : const AlwaysScrollableScrollPhysics(
+                        parent: BouncingScrollPhysics(),
+                      ),
+                child: enableHorizontalScroll
+                    ? SingleChildScrollView(
+                        controller: _horizontalScrollController,
+                        scrollDirection: Axis.horizontal,
+                        physics: const NeverScrollableScrollPhysics(),
+                        child: zoomedFormWidget,
+                      )
+                    : zoomedFormWidget,
+              ),
+            ),
+          );
+        }
 
         // Khi xoay ngang <-> xoay dọc làm thay đổi chiều rộng dòng (`maxLineTextWidth`):
         // Tự động dàn lại chữ (Reflow) để luôn lấp đầy khoảng cách 2 bên lề như Word
@@ -1626,8 +1897,9 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         // Tính tổng số dòng sao cho luôn phủ kín màn hình và tự giãn thêm khi viết dài
         final int minRowsToFillScreen =
             (constraints.maxHeight / rowHeight).ceil() + 4;
-        final int defaultMinRows =
-            isNote4x ? Note4x.defaultLineCount : Note5x.defaultLineCount;
+        final int defaultMinRows = isObservationBlank
+            ? BlankObservationTemplate.defaultLineCount
+            : (isNote4x ? Note4x.defaultLineCount : Note5x.defaultLineCount);
         final int highestUsedRow = _rowControllers.keys.isEmpty
             ? 0
             : (_rowControllers.keys.reduce(math.max) + 6);
@@ -1646,15 +1918,20 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
             // Chế độ "Chỉ xem": cho phép cuộn trang vở mượt mà nhưng chặn hoàn toàn chọn dòng / chỉnh sửa
             ignoring: _isViewOnlyMode,
             child: CustomPaint(
-              painter: isNote4x
-                  ? Note4xHorizontalPaperPainter(
+              painter: isObservationBlank
+                  ? BlankObservationPaperPainter(
                       rowHeight: rowHeight,
                       totalRows: totalRows,
                     )
-                  : Note5xHorizontalPaperPainter(
-                      rowHeight: rowHeight,
-                      totalRows: totalRows,
-                    ),
+                  : (isNote4x
+                      ? Note4xHorizontalPaperPainter(
+                          rowHeight: rowHeight,
+                          totalRows: totalRows,
+                        )
+                      : Note5xHorizontalPaperPainter(
+                          rowHeight: rowHeight,
+                          totalRows: totalRows,
+                        )),
               child: Column(
                 children: List<Widget>.generate(totalRows, (int rowIndex) {
                   final TextEditingController controller =
@@ -1888,6 +2165,183 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     );
   }
 
+  /// Xây dựng 1 ô nhập liệu / dòng viết tương tác dùng chung cho mọi trường trên Biểu mẫu dự giờ 3 trang
+  /// (Hỗ trợ cả Bàn phím, Viết bút kèm con trỏ kéo ngang và chế độ Chỉ xem)
+  Widget _buildInteractiveObservationField({
+    required int rowIndex,
+    required double width,
+    required double height,
+    required TextStyle textStyle,
+    required bool hasRamError,
+    double horizontalPadding = 6.0,
+    TextAlign textAlign = TextAlign.left,
+    String? hintText,
+    TextInputType? keyboardType,
+    double bottomContentPadding = 4.0,
+  }) {
+    final TextEditingController controller =
+        _getOrCreateRowController(rowIndex);
+    final FocusNode focusNode = _getOrCreateRowFocusNode(rowIndex);
+    final bool isRowSelected =
+        !_isViewOnlyMode && _selectedRowIndex == rowIndex;
+    final double maxFieldTextWidth = math.max(
+      24.0,
+      width - (horizontalPadding * 2) - 2.0,
+    );
+    final bounds = _getRowSectionBounds(rowIndex);
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapUp: _isViewOnlyMode
+          ? null
+          : (TapUpDetails details) => _handleSelectRow(
+                rowIndex,
+                height,
+                tapLocalDx: details.localPosition.dx,
+                horizontalPadding: horizontalPadding,
+                rowTextStyle: textStyle,
+              ),
+      onHorizontalDragUpdate:
+          (_isViewOnlyMode || (!isRowSelected && !_isPenMode))
+              ? null
+              : (DragUpdateDetails details) => _handleSelectRow(
+                    rowIndex,
+                    height,
+                    tapLocalDx: details.localPosition.dx,
+                    horizontalPadding: horizontalPadding,
+                    rowTextStyle: textStyle,
+                  ),
+      child: Container(
+        width: width,
+        height: height,
+        color: isRowSelected
+            ? AppColors.primaryBlue.withValues(alpha: 0.10)
+            : Colors.transparent,
+        padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
+        child: Stack(
+          clipBehavior: Clip.none,
+          alignment: Alignment.bottomLeft,
+          children: [
+            Align(
+              alignment: textAlign == TextAlign.center
+                  ? Alignment.bottomCenter
+                  : Alignment.bottomLeft,
+              child: IgnorePointer(
+                ignoring: _isViewOnlyMode || !isRowSelected || _isPenMode,
+                child: TextField(
+                  controller: controller,
+                  focusNode: focusNode,
+                  readOnly: _isViewOnlyMode || _isPenMode || hasRamError,
+                  showCursor: _isKeyboardMode && isRowSelected,
+                  cursorColor: AppColors.primaryBlue,
+                  cursorWidth: 2.2,
+                  maxLines: 1,
+                  textAlign: textAlign,
+                  keyboardType: keyboardType,
+                  scrollPhysics: const NeverScrollableScrollPhysics(),
+                  textInputAction: TextInputAction.next,
+                  onTap: _isViewOnlyMode
+                      ? null
+                      : () => _handleSelectRow(rowIndex, height),
+                  onChanged: (value) => _onRowTextChanged(
+                    rowIndex,
+                    value,
+                    maxLineTextWidth: maxFieldTextWidth,
+                    rowTextStyle: textStyle,
+                    rowHeight: height,
+                  ),
+                  onSubmitted: (_) {
+                    // Khi bấm Enter:
+                    // - Nếu đang ở trong vùng nhiều dòng (Bảng 3 cột / Nhận xét chung) thì xuống dòng kế tiếp
+                    // - Nếu đang nhập điểm tiêu chí (500..510) hoặc thông tin đầu trang (0..3) thì chuyển sang ô tiếp theo
+                    if (!bounds.isSingleLine && rowIndex < bounds.maxRow) {
+                      _handleSelectRow(rowIndex + 1, height);
+                    } else if ((rowIndex >= 0 && rowIndex < 4) ||
+                        (rowIndex >= PrimarySchoolEvaluationTemplate.scoreStartRow &&
+                            rowIndex <
+                                PrimarySchoolEvaluationTemplate.scoreStartRow +
+                                    PrimarySchoolEvaluationTemplate
+                                        .scoreRowCount -
+                                    1)) {
+                      _handleSelectRow(rowIndex + 1, height);
+                    } else {
+                      _closeKeyboardAndDeselectRow();
+                    }
+                  },
+                  style: textStyle,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
+                    contentPadding: EdgeInsets.only(
+                      bottom: bottomContentPadding,
+                    ),
+                    hintText: !_isViewOnlyMode ? hintText : null,
+                    hintStyle: TextStyle(
+                      color: AppColors.primaryBlue.withValues(alpha: 0.35),
+                      fontSize: (textStyle.fontSize ?? 14.0) * 0.9,
+                      fontWeight: FontWeight.w400,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            // Con trỏ + nút nắm kéo (Handle) hiển thị trực quan trên ô đang chọn ở chế độ Viết bút
+            if (isRowSelected && _isPenMode)
+              ValueListenableBuilder<TextEditingValue>(
+                valueListenable: controller,
+                builder: (context, textValue, _) {
+                  final String clean = _cleanText(textValue.text);
+                  final int cleanCursor =
+                      _getRowCleanCursorOffset(rowIndex).clamp(0, clean.length);
+                  final String textBeforeCursor =
+                      clean.substring(0, cleanCursor);
+                  final double cursorX = _measureTextWidth(
+                    textBeforeCursor,
+                    textStyle,
+                  ).clamp(0.0, maxFieldTextWidth);
+
+                  return Positioned(
+                    left: (cursorX - 5.0).clamp(-5.0, maxFieldTextWidth - 5.0),
+                    bottom: height * 0.04,
+                    child: IgnorePointer(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 2.4,
+                            height: height * 0.56,
+                            decoration: BoxDecoration(
+                              color: AppColors.primaryBlue,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                          Container(
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                              color: AppColors.primaryBlue,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: AppColors.basicWhite,
+                                width: 1.5,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   /// Cụm 2 nút Dấu Trừ (-) và Dấu Cộng (+) nằm kế bên nút Lưu để Zoom màn hình vở
   Widget _buildZoomControls({required double fontSize}) {
     final bool canZoomOut = _zoomScale > _minZoomScale + 0.01;
@@ -2000,7 +2454,9 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                     runSpacing: 4,
                     children: [
                       Text(
-                        'Đang chọn dòng ${selectedRow + 1}',
+                        _isPrimaryEvalTemplate
+                            ? 'Đang chọn: ${PrimarySchoolEvaluationTemplate.getFieldDisplayName(selectedRow)}'
+                            : 'Đang chọn dòng ${selectedRow + 1}',
                         style: TextStyle(
                           color: AppColors.primaryBlue,
                           fontSize: fontSize * 1.05,
@@ -2079,32 +2535,75 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     );
   }
 
-  /// Tính thông số kích thước dòng và kiểu chữ hiện tại của trang vở
+  /// Tính thông số kích thước dòng và kiểu chữ hiện tại của trang vở / biểu mẫu
   ({double rowHeight, double maxLineTextWidth, TextStyle rowTextStyle})
       _getCurrentRowLayoutMetrics() {
-    final String activeTemplate =
-        _notebook?.paperTemplate ?? widget.fileItem.paperTemplate;
+    final String activeTemplate = _activeTemplateId;
     final bool isNote4x = activeTemplate == Note4x.templateId;
+    final bool isObservationBlank =
+        activeTemplate == BlankObservationTemplate.templateId;
+    final bool isPrimaryEval = _isPrimaryEvalTemplate;
     final double screenWidth = MediaQuery.sizeOf(context).width;
-    final double paperWidth = isNote4x
-        ? Note4x.getResponsivePaperWidth(screenWidth)
-        : Note5x.getResponsivePaperWidth(screenWidth);
-    final double rowHeight = isNote4x
-        ? Note4x.getResponsiveRowHeight(context, maxWidth: paperWidth)
-        : Note5x.getResponsiveRowHeight(context, maxWidth: paperWidth);
-    final double horizontalPadding = isNote4x
-        ? Note4x.getResponsiveHorizontalPadding(paperWidth)
-        : Note5x.getResponsiveHorizontalPadding(paperWidth);
-    final double maxLineTextWidth = math.max(
+    final double paperWidth = isPrimaryEval
+        ? PrimarySchoolEvaluationTemplate.getResponsivePaperWidth(screenWidth)
+        : (isObservationBlank
+            ? BlankObservationTemplate.getResponsivePaperWidth(screenWidth)
+            : (isNote4x
+                ? Note4x.getResponsivePaperWidth(screenWidth)
+                : Note5x.getResponsivePaperWidth(screenWidth)));
+    final double rowHeight = (isPrimaryEval || isObservationBlank)
+        ? BlankObservationTemplate.getResponsiveRowHeight(
+            context,
+            maxWidth: paperWidth,
+          )
+        : (isNote4x
+            ? Note4x.getResponsiveRowHeight(context, maxWidth: paperWidth)
+            : Note5x.getResponsiveRowHeight(context, maxWidth: paperWidth));
+    final double horizontalPadding = (isPrimaryEval || isObservationBlank)
+        ? BlankObservationTemplate.getResponsiveHorizontalPadding(paperWidth)
+        : (isNote4x
+            ? Note4x.getResponsiveHorizontalPadding(paperWidth)
+            : Note5x.getResponsiveHorizontalPadding(paperWidth));
+
+    double maxLineTextWidth = math.max(
       120.0,
       paperWidth - (horizontalPadding * 2) - 2.0,
     );
-    final double lineFontSize = (rowHeight * 0.42).clamp(15.0, 22.0);
+
+    if (isPrimaryEval) {
+      final double pageHorizontalPadding =
+          (paperWidth * 0.032).clamp(16.0, 32.0);
+      final double innerWidth = paperWidth - (pageHorizontalPadding * 2);
+      final int activeRow = _selectedRowIndex ?? 0;
+      if (activeRow >= PrimarySchoolEvaluationTemplate.col1StartRow &&
+          activeRow <
+              PrimarySchoolEvaluationTemplate.col3StartRow +
+                  PrimarySchoolEvaluationTemplate.activityTableRowCount) {
+        final double colWidth = (innerWidth - 4.0) / 3.0;
+        maxLineTextWidth = math.max(60.0, colWidth - 14.0);
+      } else if (activeRow >=
+              PrimarySchoolEvaluationTemplate.generalCommentStartRow &&
+          activeRow <
+              PrimarySchoolEvaluationTemplate.generalCommentStartRow +
+                  PrimarySchoolEvaluationTemplate.generalCommentLineCount) {
+        maxLineTextWidth = math.max(100.0, innerWidth - 10.0);
+      } else {
+        maxLineTextWidth = innerWidth;
+      }
+    }
+
+    final double lineFontSize = isPrimaryEval
+        ? (rowHeight * 0.39).clamp(13.5, 18.0)
+        : (rowHeight * 0.42).clamp(15.0, 22.0);
     final TextStyle rowTextStyle =
         (Theme.of(context).textTheme.bodyMedium ?? const TextStyle()).copyWith(
-      color: isNote4x ? Note4x.getTextColor() : Note5x.getTextColor(),
+      color: isPrimaryEval
+          ? AppColors.primaryBlue
+          : (isObservationBlank
+              ? BlankObservationTemplate.getTextColor()
+              : (isNote4x ? Note4x.getTextColor() : Note5x.getTextColor())),
       fontSize: lineFontSize,
-      fontWeight: FontWeight.w500,
+      fontWeight: isPrimaryEval ? FontWeight.w600 : FontWeight.w500,
       height: 1.15,
     );
     return (
@@ -2128,6 +2627,8 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     if (trimmed.isEmpty) return;
 
     final int rowIndex = _selectedRowIndex ?? 0;
+    final bounds = _getRowSectionBounds(rowIndex);
+    final bool usesSentinel = _rowUsesBackspaceSentinel(rowIndex);
     final String existingClean =
         _cleanText(_getOrCreateRowController(rowIndex).text);
     final int cursorOffset =
@@ -2160,11 +2661,16 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         rowIndex,
         newClean,
         cursorCleanOffset: newCursorCleanOffset,
-        forceSentinel: rowIndex > 0,
+        forceSentinel: usesSentinel,
       );
 
-      if (_measureTextWidth(newClean, metrics.rowTextStyle) >
-          metrics.maxLineTextWidth) {
+      if (_isPrimaryEvalTemplate &&
+          PrimarySchoolEvaluationTemplate.isScoreRow(rowIndex)) {
+        _handlePrimaryEvalScoreUpdated(rowIndex, newClean);
+      } else if (!bounds.isSingleLine &&
+          rowIndex < bounds.maxRow &&
+          _measureTextWidth(newClean, metrics.rowTextStyle) >
+              metrics.maxLineTextWidth) {
         _wrapOverflowFromRow(
           startRowIndex: rowIndex,
           maxLineTextWidth: metrics.maxLineTextWidth,
@@ -2173,7 +2679,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
           keepFocusOnRow: rowIndex,
           keepCursorCleanOffset: newCursorCleanOffset,
         );
-      } else {
+      } else if (!_isPrimaryEvalTemplate) {
         _ensureRowVisible(rowIndex, metrics.rowHeight);
       }
     } finally {
@@ -2181,7 +2687,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     }
 
     // Giữ hiển thị con trỏ tại điểm vừa chèn nhưng ẩn bàn phím ảo
-    _getOrCreateRowFocusNode( _selectedRowIndex ?? rowIndex).requestFocus();
+    _getOrCreateRowFocusNode(_selectedRowIndex ?? rowIndex).requestFocus();
     SystemChannels.textInput.invokeMethod('TextInput.hide');
 
     _saveLinesToRamAndScheduleDriveSync();
@@ -2191,6 +2697,8 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   void _handlePenInsertSpace() {
     if (_isViewOnlyMode || _syncRepository.hasRamErrorNotifier.value) return;
     final int rowIndex = _selectedRowIndex ?? 0;
+    final bounds = _getRowSectionBounds(rowIndex);
+    final bool usesSentinel = _rowUsesBackspaceSentinel(rowIndex);
     final String existingClean =
         _cleanText(_getOrCreateRowController(rowIndex).text);
     final int cursorOffset =
@@ -2210,10 +2718,12 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         rowIndex,
         newClean,
         cursorCleanOffset: newCursorCleanOffset,
-        forceSentinel: rowIndex > 0,
+        forceSentinel: usesSentinel,
       );
-      if (_measureTextWidth(newClean, metrics.rowTextStyle) >
-          metrics.maxLineTextWidth) {
+      if (!bounds.isSingleLine &&
+          rowIndex < bounds.maxRow &&
+          _measureTextWidth(newClean, metrics.rowTextStyle) >
+              metrics.maxLineTextWidth) {
         _wrapOverflowFromRow(
           startRowIndex: rowIndex,
           maxLineTextWidth: metrics.maxLineTextWidth,
@@ -2235,6 +2745,8 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   void _handlePenBackspace() {
     if (_isViewOnlyMode || _syncRepository.hasRamErrorNotifier.value) return;
     final int rowIndex = _selectedRowIndex ?? 0;
+    final bounds = _getRowSectionBounds(rowIndex);
+    final bool usesSentinel = _rowUsesBackspaceSentinel(rowIndex);
     final String existingClean =
         _cleanText(_getOrCreateRowController(rowIndex).text);
     final int cursorOffset =
@@ -2242,7 +2754,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     final metrics = _getCurrentRowLayoutMetrics();
 
     if (existingClean.isEmpty || cursorOffset == 0) {
-      if (rowIndex > 0) {
+      if (usesSentinel) {
         _jumpOrMergeToPreviousRow(
           rowIndex: rowIndex,
           remainingCleanOnCurrentRow: existingClean,
@@ -2260,7 +2772,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     final String shortened = '$beforeCursor$afterCursor';
     final int newCursorCleanOffset = cursorOffset - 1;
 
-    if (shortened.isEmpty && rowIndex > 0) {
+    if (shortened.isEmpty && usesSentinel) {
       _jumpOrMergeToPreviousRow(
         rowIndex: rowIndex,
         remainingCleanOnCurrentRow: '',
@@ -2274,8 +2786,9 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
 
     _isWrappingLine = true;
     try {
-      final String nextClean =
-          _cleanText(_rowControllers[rowIndex + 1]?.text ?? '');
+      final String nextClean = (!bounds.isSingleLine && rowIndex < bounds.maxRow)
+          ? _cleanText(_rowControllers[rowIndex + 1]?.text ?? '')
+          : '';
       if (nextClean.isNotEmpty &&
           _measureTextWidth(shortened, metrics.rowTextStyle) <
               metrics.maxLineTextWidth) {
@@ -2285,7 +2798,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
           rowIndex,
           combined,
           cursorCleanOffset: newCursorCleanOffset,
-          forceSentinel: rowIndex > 0,
+          forceSentinel: usesSentinel,
         );
         _wrapOverflowFromRow(
           startRowIndex: rowIndex,
@@ -2300,8 +2813,12 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
           rowIndex,
           shortened,
           cursorCleanOffset: newCursorCleanOffset,
-          forceSentinel: rowIndex > 0,
+          forceSentinel: usesSentinel,
         );
+      }
+      if (_isPrimaryEvalTemplate &&
+          PrimarySchoolEvaluationTemplate.isScoreRow(rowIndex)) {
+        _handlePrimaryEvalScoreUpdated(rowIndex, shortened);
       }
     } finally {
       _isWrappingLine = false;
@@ -2367,7 +2884,9 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                         children: [
                           Text(
                             _selectedRowIndex != null
-                                ? 'Viết bút - Dòng ${_selectedRowIndex! + 1}'
+                                ? (_isPrimaryEvalTemplate
+                                    ? 'Viết bút - ${PrimarySchoolEvaluationTemplate.getFieldDisplayName(_selectedRowIndex!)}'
+                                    : 'Viết bút - Dòng ${_selectedRowIndex! + 1}')
                                 : 'Viết bút',
                             style: TextStyle(
                               color: AppColors.primaryBlue,
