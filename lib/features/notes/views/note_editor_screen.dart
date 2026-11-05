@@ -11,6 +11,7 @@ import '../../../data/models/notebook_model.dart';
 import '../../../data/models/page_model.dart';
 import '../../../data/repositories/data_sync_repository.dart';
 import '../../../widgets/center_notification_dialog.dart';
+import 'widgets/pen_handwriting_pad_widget.dart';
 
 // ===========================================================================
 // CÁC CHẾ ĐỘ & TÁC VỤ TRONG MENU CỦA TRANG GHI CHÚ:
@@ -370,16 +371,19 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
             node.unfocus();
             return;
           }
-          if (node.hasFocus && _isKeyboardMode && mounted) {
+          if (node.hasFocus && (_isKeyboardMode || _isPenMode) && mounted) {
             if (rowIndex > 0) {
               final TextEditingController ctrl =
                   _getOrCreateRowController(rowIndex);
               if (!ctrl.text.startsWith(_kZeroWidthSpace)) {
                 final String clean = _cleanText(ctrl.text);
+                final int currentCursor = ctrl.selection.baseOffset >= 0
+                    ? ctrl.selection.baseOffset.clamp(0, clean.length)
+                    : clean.length;
                 _setRowCleanText(
                   rowIndex,
                   clean,
-                  cursorCleanOffset: clean.length,
+                  cursorCleanOffset: currentCursor,
                   forceSentinel: true,
                 );
               }
@@ -387,6 +391,9 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
             if (_selectedRowIndex != rowIndex) {
               setState(() {
                 _selectedRowIndex = rowIndex;
+                if (_isPenMode) {
+                  _isPenSheetOpen = true;
+                }
               });
             }
           }
@@ -394,6 +401,45 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         return node;
       },
     );
+  }
+
+  /// Lấy vị trí con trỏ thực tế (đã trừ ký tự neo ẩn) trên dòng `rowIndex`
+  int _getRowCleanCursorOffset(int rowIndex) {
+    final TextEditingController ctrl = _getOrCreateRowController(rowIndex);
+    final String raw = ctrl.text;
+    final String clean = _cleanText(raw);
+    final int rawOffset = ctrl.selection.baseOffset;
+    if (rawOffset < 0) {
+      return clean.length;
+    }
+    final int cleanOffset =
+        (rowIndex > 0 && raw.startsWith(_kZeroWidthSpace))
+            ? rawOffset - 1
+            : rawOffset;
+    return cleanOffset.clamp(0, clean.length);
+  }
+
+  /// Tính chính xác vị trí ký tự (cleanOffset) tại điểm chạm ngang `tapLocalDx` trên câu
+  int _calculateCleanOffsetFromTapDx({
+    required String cleanText,
+    required double tapLocalDx,
+    required double horizontalPadding,
+    required TextStyle rowTextStyle,
+  }) {
+    if (cleanText.isEmpty) return 0;
+    final double textX =
+        (tapLocalDx - horizontalPadding).clamp(0.0, double.infinity);
+    final TextPainter painter = TextPainter(
+      text: TextSpan(text: cleanText, style: rowTextStyle),
+      maxLines: 1,
+      textDirection: TextDirection.ltr,
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout(minWidth: 0, maxWidth: double.infinity);
+
+    return painter
+        .getPositionForOffset(Offset(textX, 0))
+        .offset
+        .clamp(0, cleanText.length);
   }
 
   // ===========================================================================
@@ -407,26 +453,44 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     });
   }
 
-  /// Hàm chọn 1 dòng trên trang vở (Chặn chọn dòng nếu đang ở chế độ "Chỉ xem" hoặc có lỗi bộ nhớ RAM)
-  void _handleSelectRow(int rowIndex, double rowHeight) {
+  /// Hàm chọn 1 dòng trên trang vở và đặt con trỏ đúng vào vị trí điểm chạm trên câu (hỗ trợ cả Bàn phím & Viết bút)
+  void _handleSelectRow(
+    int rowIndex,
+    double rowHeight, {
+    double? tapLocalDx,
+    double? horizontalPadding,
+    TextStyle? rowTextStyle,
+  }) {
     // Nếu đang ở chế độ "Chỉ xem" hoặc đang có lỗi bộ nhớ RAM -> Chặn ngay không cho bấm chọn dòng
     if (_isViewOnlyMode || _syncRepository.hasRamErrorNotifier.value) {
       FocusScope.of(context).unfocus();
       return;
     }
 
-    if (rowIndex > 0) {
-      final TextEditingController ctrl = _getOrCreateRowController(rowIndex);
-      if (!ctrl.text.startsWith(_kZeroWidthSpace)) {
-        final String clean = _cleanText(ctrl.text);
-        _setRowCleanText(
-          rowIndex,
-          clean,
-          cursorCleanOffset: clean.length,
-          forceSentinel: true,
-        );
-      }
+    final TextEditingController ctrl = _getOrCreateRowController(rowIndex);
+    final String clean = _cleanText(ctrl.text);
+
+    // Xác định vị trí con trỏ tại điểm bút/tay vừa chạm vào câu (để chèn bù chữ thiếu ngay tại đó)
+    final int targetCleanOffset;
+    if (tapLocalDx != null &&
+        horizontalPadding != null &&
+        rowTextStyle != null) {
+      targetCleanOffset = _calculateCleanOffsetFromTapDx(
+        cleanText: clean,
+        tapLocalDx: tapLocalDx,
+        horizontalPadding: horizontalPadding,
+        rowTextStyle: rowTextStyle,
+      );
+    } else {
+      targetCleanOffset = _getRowCleanCursorOffset(rowIndex);
     }
+
+    _setRowCleanText(
+      rowIndex,
+      clean,
+      cursorCleanOffset: targetCleanOffset,
+      forceSentinel: rowIndex > 0,
+    );
 
     setState(() {
       _selectedRowIndex = rowIndex;
@@ -435,9 +499,10 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       }
     });
 
+    final FocusNode node = _getOrCreateRowFocusNode(rowIndex);
+    node.requestFocus();
+
     if (_isKeyboardMode) {
-      final FocusNode node = _getOrCreateRowFocusNode(rowIndex);
-      node.requestFocus();
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _isKeyboardMode) {
           node.requestFocus();
@@ -445,7 +510,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         }
       });
     } else {
-      FocusScope.of(context).unfocus();
+      // Chế độ Viết bút: Giữ Focus để hiển thị con trỏ nhấp nháy tại điểm trỏ trên câu nhưng ẩn bàn phím ảo
       SystemChannels.textInput.invokeMethod('TextInput.hide');
     }
   }
@@ -729,6 +794,11 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       if (targetFocusRow == null) {
         targetFocusRow = nextRow;
         targetCursorCleanOffset = overflowText.length;
+      } else if (targetFocusRow == currentRow &&
+          targetCursorCleanOffset > keptText.length) {
+        targetFocusRow = nextRow;
+        targetCursorCleanOffset =
+            (targetCursorCleanOffset - splitIndex).clamp(0, overflowText.length);
       }
 
       currentRow = nextRow;
@@ -1596,9 +1666,15 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
 
                   return GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTap: _isViewOnlyMode
+                    onTapUp: _isViewOnlyMode
                         ? null
-                        : () => _handleSelectRow(rowIndex, rowHeight),
+                        : (TapUpDetails details) => _handleSelectRow(
+                              rowIndex,
+                              rowHeight,
+                              tapLocalDx: details.localPosition.dx,
+                              horizontalPadding: horizontalPadding,
+                              rowTextStyle: effectiveRowTextStyle,
+                            ),
                     child: Container(
                       width: paperWidth,
                       height: rowHeight,
@@ -1618,7 +1694,10 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                             focusNode: focusNode,
                             readOnly:
                                 _isViewOnlyMode || _isPenMode || hasRamError,
-                            showCursor: _isKeyboardMode && isRowSelected,
+                            showCursor:
+                                (_isKeyboardMode || _isPenMode) && isRowSelected,
+                            cursorColor: AppColors.primaryBlue,
+                            cursorWidth: 2.2,
                             maxLines: 1,
                             // Khóa cuộn ngang nội bộ của TextField để chữ không bao giờ chạy dài vô tận trên 1 dòng
                             scrollPhysics: const NeverScrollableScrollPhysics(),
@@ -1926,6 +2005,238 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     );
   }
 
+  /// Tính thông số kích thước dòng và kiểu chữ hiện tại của trang vở
+  ({double rowHeight, double maxLineTextWidth, TextStyle rowTextStyle})
+      _getCurrentRowLayoutMetrics() {
+    final String activeTemplate =
+        _notebook?.paperTemplate ?? widget.fileItem.paperTemplate;
+    final bool isNote4x = activeTemplate == Note4x.templateId;
+    final double screenWidth = MediaQuery.sizeOf(context).width;
+    final double paperWidth = isNote4x
+        ? Note4x.getResponsivePaperWidth(screenWidth)
+        : Note5x.getResponsivePaperWidth(screenWidth);
+    final double rowHeight = isNote4x
+        ? Note4x.getResponsiveRowHeight(context, maxWidth: paperWidth)
+        : Note5x.getResponsiveRowHeight(context, maxWidth: paperWidth);
+    final double horizontalPadding = isNote4x
+        ? Note4x.getResponsiveHorizontalPadding(paperWidth)
+        : Note5x.getResponsiveHorizontalPadding(paperWidth);
+    final double maxLineTextWidth = math.max(
+      120.0,
+      paperWidth - (horizontalPadding * 2) - 2.0,
+    );
+    final double lineFontSize = (rowHeight * 0.42).clamp(15.0, 22.0);
+    final TextStyle rowTextStyle =
+        (Theme.of(context).textTheme.bodyMedium ?? const TextStyle()).copyWith(
+      color: isNote4x ? Note4x.getTextColor() : Note5x.getTextColor(),
+      fontSize: lineFontSize,
+      fontWeight: FontWeight.w500,
+      height: 1.15,
+    );
+    return (
+      rowHeight: rowHeight,
+      maxLineTextWidth: maxLineTextWidth,
+      rowTextStyle: rowTextStyle,
+    );
+  }
+
+  /// Xử lý điền văn bản vừa được AI nhận diện từ Bottom Sheet Viết bút vào ĐÚNG VỊ TRÍ CON TRỎ trên câu:
+  /// - Cho phép người dùng dùng bút trỏ vào bất kỳ điểm nào trên câu để chèn thêm chữ bù/thiếu.
+  /// - Nếu viết liên tục (insertLeadingSpace == false): nối liền ký tự vào ngay vị trí con trỏ.
+  /// - Nếu ngừng 1 khoảnh khắc (insertLeadingSpace == true): tự động cách ra 1 khoảng trắng trước từ mới.
+  /// - Nếu vượt quá chiều ngang giấy: tự động ngắt xuống dòng kế tiếp như Word.
+  void _handleCommitRecognizedPenText(
+    String recognizedText, {
+    required bool insertLeadingSpace,
+  }) {
+    if (_isViewOnlyMode || _syncRepository.hasRamErrorNotifier.value) return;
+    final String trimmed = recognizedText.trim();
+    if (trimmed.isEmpty) return;
+
+    final int rowIndex = _selectedRowIndex ?? 0;
+    final String existingClean =
+        _cleanText(_getOrCreateRowController(rowIndex).text);
+    final int cursorOffset =
+        _getRowCleanCursorOffset(rowIndex).clamp(0, existingClean.length);
+
+    final String beforeCursor = existingClean.substring(0, cursorOffset);
+    final String afterCursor = existingClean.substring(cursorOffset);
+
+    // Không chèn khoảng trắng trước dấu câu (, . ? ! : ; ) ])
+    const String punctuationChars = ',.?!:;)]}';
+    final bool isPunctuation =
+        trimmed.length == 1 && punctuationChars.contains(trimmed);
+
+    final String insertedPart;
+    if (beforeCursor.isEmpty || beforeCursor.endsWith(' ') || isPunctuation) {
+      insertedPart = trimmed;
+    } else if (insertLeadingSpace) {
+      insertedPart = ' $trimmed';
+    } else {
+      insertedPart = trimmed;
+    }
+
+    final String newClean = '$beforeCursor$insertedPart$afterCursor';
+    final int newCursorCleanOffset = beforeCursor.length + insertedPart.length;
+    final metrics = _getCurrentRowLayoutMetrics();
+
+    _isWrappingLine = true;
+    try {
+      _setRowCleanText(
+        rowIndex,
+        newClean,
+        cursorCleanOffset: newCursorCleanOffset,
+        forceSentinel: rowIndex > 0,
+      );
+
+      if (_measureTextWidth(newClean, metrics.rowTextStyle) >
+          metrics.maxLineTextWidth) {
+        _wrapOverflowFromRow(
+          startRowIndex: rowIndex,
+          maxLineTextWidth: metrics.maxLineTextWidth,
+          rowTextStyle: metrics.rowTextStyle,
+          rowHeight: metrics.rowHeight,
+          keepFocusOnRow: rowIndex,
+          keepCursorCleanOffset: newCursorCleanOffset,
+        );
+      } else {
+        _ensureRowVisible(rowIndex, metrics.rowHeight);
+      }
+    } finally {
+      _isWrappingLine = false;
+    }
+
+    // Giữ hiển thị con trỏ tại điểm vừa chèn nhưng ẩn bàn phím ảo
+    _getOrCreateRowFocusNode( _selectedRowIndex ?? rowIndex).requestFocus();
+    SystemChannels.textInput.invokeMethod('TextInput.hide');
+
+    _saveLinesToRamAndScheduleDriveSync();
+  }
+
+  /// Chủ động thêm 1 khoảng trắng ngay tại vị trí con trỏ đang trỏ trên câu trong chế độ Viết bút
+  void _handlePenInsertSpace() {
+    if (_isViewOnlyMode || _syncRepository.hasRamErrorNotifier.value) return;
+    final int rowIndex = _selectedRowIndex ?? 0;
+    final String existingClean =
+        _cleanText(_getOrCreateRowController(rowIndex).text);
+    final int cursorOffset =
+        _getRowCleanCursorOffset(rowIndex).clamp(0, existingClean.length);
+
+    final String beforeCursor = existingClean.substring(0, cursorOffset);
+    final String afterCursor = existingClean.substring(cursorOffset);
+    if (beforeCursor.isEmpty || beforeCursor.endsWith(' ')) return;
+
+    final String newClean = '$beforeCursor $afterCursor';
+    final int newCursorCleanOffset = cursorOffset + 1;
+    final metrics = _getCurrentRowLayoutMetrics();
+
+    _isWrappingLine = true;
+    try {
+      _setRowCleanText(
+        rowIndex,
+        newClean,
+        cursorCleanOffset: newCursorCleanOffset,
+        forceSentinel: rowIndex > 0,
+      );
+      if (_measureTextWidth(newClean, metrics.rowTextStyle) >
+          metrics.maxLineTextWidth) {
+        _wrapOverflowFromRow(
+          startRowIndex: rowIndex,
+          maxLineTextWidth: metrics.maxLineTextWidth,
+          rowTextStyle: metrics.rowTextStyle,
+          rowHeight: metrics.rowHeight,
+          keepFocusOnRow: rowIndex,
+          keepCursorCleanOffset: newCursorCleanOffset,
+        );
+      }
+    } finally {
+      _isWrappingLine = false;
+    }
+    _getOrCreateRowFocusNode(_selectedRowIndex ?? rowIndex).requestFocus();
+    SystemChannels.textInput.invokeMethod('TextInput.hide');
+    _saveLinesToRamAndScheduleDriveSync();
+  }
+
+  /// Xóa lùi 1 ký tự ngay tại vị trí con trỏ đang trỏ trên câu trong chế độ Viết bút
+  void _handlePenBackspace() {
+    if (_isViewOnlyMode || _syncRepository.hasRamErrorNotifier.value) return;
+    final int rowIndex = _selectedRowIndex ?? 0;
+    final String existingClean =
+        _cleanText(_getOrCreateRowController(rowIndex).text);
+    final int cursorOffset =
+        _getRowCleanCursorOffset(rowIndex).clamp(0, existingClean.length);
+    final metrics = _getCurrentRowLayoutMetrics();
+
+    if (existingClean.isEmpty || cursorOffset == 0) {
+      if (rowIndex > 0) {
+        _jumpOrMergeToPreviousRow(
+          rowIndex: rowIndex,
+          remainingCleanOnCurrentRow: existingClean,
+          maxLineTextWidth: metrics.maxLineTextWidth,
+          rowTextStyle: metrics.rowTextStyle,
+          rowHeight: metrics.rowHeight,
+        );
+        SystemChannels.textInput.invokeMethod('TextInput.hide');
+      }
+      return;
+    }
+
+    final String beforeCursor = existingClean.substring(0, cursorOffset - 1);
+    final String afterCursor = existingClean.substring(cursorOffset);
+    final String shortened = '$beforeCursor$afterCursor';
+    final int newCursorCleanOffset = cursorOffset - 1;
+
+    if (shortened.isEmpty && rowIndex > 0) {
+      _jumpOrMergeToPreviousRow(
+        rowIndex: rowIndex,
+        remainingCleanOnCurrentRow: '',
+        maxLineTextWidth: metrics.maxLineTextWidth,
+        rowTextStyle: metrics.rowTextStyle,
+        rowHeight: metrics.rowHeight,
+      );
+      SystemChannels.textInput.invokeMethod('TextInput.hide');
+      return;
+    }
+
+    _isWrappingLine = true;
+    try {
+      final String nextClean =
+          _cleanText(_rowControllers[rowIndex + 1]?.text ?? '');
+      if (nextClean.isNotEmpty &&
+          _measureTextWidth(shortened, metrics.rowTextStyle) <
+              metrics.maxLineTextWidth) {
+        final String combined = '$shortened$nextClean';
+        _setRowCleanText(rowIndex + 1, '');
+        _setRowCleanText(
+          rowIndex,
+          combined,
+          cursorCleanOffset: newCursorCleanOffset,
+          forceSentinel: rowIndex > 0,
+        );
+        _wrapOverflowFromRow(
+          startRowIndex: rowIndex,
+          maxLineTextWidth: metrics.maxLineTextWidth,
+          rowTextStyle: metrics.rowTextStyle,
+          rowHeight: metrics.rowHeight,
+          keepFocusOnRow: rowIndex,
+          keepCursorCleanOffset: newCursorCleanOffset,
+        );
+      } else {
+        _setRowCleanText(
+          rowIndex,
+          shortened,
+          cursorCleanOffset: newCursorCleanOffset,
+          forceSentinel: rowIndex > 0,
+        );
+      }
+    } finally {
+      _isWrappingLine = false;
+    }
+    _getOrCreateRowFocusNode(_selectedRowIndex ?? rowIndex).requestFocus();
+    SystemChannels.textInput.invokeMethod('TextInput.hide');
+    _saveLinesToRamAndScheduleDriveSync();
+  }
+
   /// Bottom Sheet chế độ "Viết bút":
   /// - Cao đúng nửa màn hình (50% chiều cao màn hình)
   /// - Nền màu trắng (AppColors.basicWhite)
@@ -1941,125 +2252,197 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         _getOrCreateRowController(selectedRow);
     final double badgeFontSize = AppTheme.getResponsiveFontSize(context, 12);
 
-    return GestureDetector(
-      // Chặn sự kiện vuốt dọc trên khung Bottom Sheet để không có kiểu vuốt tắt
-      onVerticalDragUpdate: (_) {},
-      child: Container(
-        width: double.infinity,
-        height: sheetHeight,
-        decoration: BoxDecoration(
-          color: AppColors.basicWhite, // Nền màu trắng theo yêu cầu
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          border: Border(
-            top: BorderSide(
-              color: AppColors.primaryBlue.withValues(alpha: 0.3),
-              width: 1.5,
-            ),
+    return Container(
+      width: double.infinity,
+      height: sheetHeight,
+      decoration: BoxDecoration(
+        color: AppColors.basicWhite, // Nền màu trắng theo yêu cầu
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        border: Border(
+          top: BorderSide(
+            color: AppColors.primaryBlue.withValues(alpha: 0.3),
+            width: 1.5,
           ),
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.basicBlack.withValues(alpha: 0.12),
-              blurRadius: 12,
-              offset: const Offset(0, -3),
-            ),
-          ],
         ),
-        child: Column(
-          children: [
-            // Hàng tiêu đề trên cùng của Bottom Sheet Viết bút (Chỉ có nút dấu X để đóng, không có thanh vuốt)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 10, 12, 8),
-              child: ValueListenableBuilder<TextEditingValue>(
-                valueListenable: activeController,
-                builder: (context, value, _) {
-                  final int totalCharCount = _getTotalCharacterCount();
-                  final String charCountLabel = '$totalCharCount ký tự';
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.basicBlack.withValues(alpha: 0.12),
+            blurRadius: 12,
+            offset: const Offset(0, -3),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          // Hàng tiêu đề trên cùng của Bottom Sheet Viết bút (Chỉ có nút dấu X để đóng, không có thanh vuốt)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 10, 12, 8),
+            child: ValueListenableBuilder<TextEditingValue>(
+              valueListenable: activeController,
+              builder: (context, value, _) {
+                final int totalCharCount = _getTotalCharacterCount();
+                final String charCountLabel = '$totalCharCount ký tự';
 
-                  return Row(
-                    children: [
-                      Expanded(
-                        child: Wrap(
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          spacing: 10,
-                          runSpacing: 4,
-                          children: [
-                            Text(
-                              _selectedRowIndex != null
-                                  ? 'Viết bút - Dòng ${_selectedRowIndex! + 1}'
-                                  : 'Viết bút',
-                              style: TextStyle(
-                                color: AppColors.primaryBlue,
-                                fontSize: titleFontSize,
-                                fontWeight: FontWeight.w800,
+                return Row(
+                  children: [
+                    Expanded(
+                      child: Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 10,
+                        runSpacing: 4,
+                        children: [
+                          Text(
+                            _selectedRowIndex != null
+                                ? 'Viết bút - Dòng ${_selectedRowIndex! + 1}'
+                                : 'Viết bút',
+                            style: TextStyle(
+                              color: AppColors.primaryBlue,
+                              fontSize: titleFontSize,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.creamBackground,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: AppColors.primaryBlue
+                                    .withValues(alpha: 0.25),
                               ),
                             ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 3,
+                            child: Text(
+                              charCountLabel,
+                              style: TextStyle(
+                                color: AppColors.primaryBlue,
+                                fontSize: badgeFontSize * 0.96,
+                                fontWeight: FontWeight.w600,
                               ),
-                              decoration: BoxDecoration(
-                                color: AppColors.creamBackground,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: AppColors.primaryBlue
-                                      .withValues(alpha: 0.25),
-                                ),
-                              ),
-                              child: Text(
-                                charCountLabel,
-                                style: TextStyle(
-                                  color: AppColors.primaryBlue,
-                                  fontSize: badgeFontSize * 0.96,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Nút Cách thủ công nhanh
+                    InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: _handlePenInsertSpace,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.creamBackground,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color:
+                                AppColors.primaryBlue.withValues(alpha: 0.25),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.space_bar_rounded,
+                              color: AppColors.primaryBlue,
+                              size: 16,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Cách',
+                              style: TextStyle(
+                                color: AppColors.primaryBlue,
+                                fontSize: badgeFontSize * 0.95,
+                                fontWeight: FontWeight.w700,
                               ),
                             ),
                           ],
                         ),
                       ),
-                      // Nút dấu X duy nhất để đóng Bottom Sheet Viết bút và bỏ chọn dòng
-                      IconButton(
-                        onPressed: () {
-                          setState(() {
-                            _isPenSheetOpen = false;
-                            _selectedRowIndex = null;
-                          });
-                        },
-                        icon: const Icon(
-                          Icons.close_rounded,
-                          color: AppColors.basicBlack,
+                    ),
+                    const SizedBox(width: 8),
+                    // Nút Xóa lùi 1 ký tự
+                    InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: _handlePenBackspace,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
                         ),
-                        tooltip: 'Đóng',
+                        decoration: BoxDecoration(
+                          color: AppColors.creamBackground,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color:
+                                AppColors.primaryBlue.withValues(alpha: 0.25),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(
+                              Icons.backspace_outlined,
+                              color: AppColors.primaryBlue,
+                              size: 16,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              'Xóa',
+                              style: TextStyle(
+                                color: AppColors.primaryBlue,
+                                fontSize: badgeFontSize * 0.95,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
-                    ],
-                  );
-                },
-              ),
+                    ),
+                    const SizedBox(width: 4),
+                    // Nút dấu X duy nhất để đóng Bottom Sheet Viết bút và bỏ chọn dòng
+                    IconButton(
+                      onPressed: () {
+                        setState(() {
+                          _isPenSheetOpen = false;
+                          _selectedRowIndex = null;
+                        });
+                      },
+                      icon: const Icon(
+                        Icons.close_rounded,
+                        color: AppColors.basicBlack,
+                      ),
+                      tooltip: 'Đóng',
+                    ),
+                  ],
+                );
+              },
             ),
-            Divider(
-              height: 1,
-              color: AppColors.primaryBlue.withValues(alpha: 0.15),
-            ),
+          ),
+          Divider(
+            height: 1,
+            color: AppColors.primaryBlue.withValues(alpha: 0.15),
+          ),
 
-            // Vùng bảng viết bút nền trắng bên trong Bottom Sheet
-            Expanded(
-              child: Container(
-                width: double.infinity,
-                color: AppColors.basicWhite,
-                alignment: Alignment.center,
-                child: Text(
-                  'Khu vực viết bút cảm ứng',
-                  style: TextStyle(
-                    color: AppColors.basicBlack.withValues(alpha: 0.35),
-                    fontSize: titleFontSize,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
+          // Vùng bảng viết bút như tờ giấy thật (0ms lag, hiện nét vẽ -> thêm chữ -> tự ẩn nét vẽ)
+          Expanded(
+            child: PenHandwritingPadWidget(
+              getCurrentRowCleanText: () {
+                final int rowIdx = _selectedRowIndex ?? 0;
+                final String fullClean =
+                    _cleanText(_getOrCreateRowController(rowIdx).text);
+                final int cursorIdx =
+                    _getRowCleanCursorOffset(rowIdx).clamp(0, fullClean.length);
+                return fullClean.substring(0, cursorIdx);
+              },
+              onCommitRecognizedText: _handleCommitRecognizedPenText,
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
