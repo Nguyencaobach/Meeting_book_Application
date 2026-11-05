@@ -44,6 +44,19 @@ class DriveFolderItem {
   }
 }
 
+/// Node đại diện cho 1 thư mục trong Cây thư mục (Folder Tree) kiểu Google Drive khi Di chuyển
+class DriveFolderTreeNode {
+  final DriveFolderItem folder;
+  final List<DriveFolderTreeNode> children;
+  final bool isCurrentParent;
+
+  const DriveFolderTreeNode({
+    required this.folder,
+    this.children = const <DriveFolderTreeNode>[],
+    this.isCurrentParent = false,
+  });
+}
+
 /// HTTP Client đính kèm Header xác thực của Google để gọi Google Drive API
 class GoogleAuthClient extends http.BaseClient {
   final Map<String, String> _headers;
@@ -100,8 +113,16 @@ class GoogleDriveDatasource {
   String? _notesTabFolderId;
   String? _observationTabFolderId;
 
+  // Ngăn xếp (Stack) điều hướng thư mục nhiều cấp (cho phép mở thư mục con nằm trong thư mục cha)
+  final List<DriveFolderItem> _notesFolderStack = <DriveFolderItem>[];
+  final List<DriveFolderItem> _observationFolderStack = <DriveFolderItem>[];
+
   /// Thư mục con đang được chọn mở trong Tab Ghi chú (null = đang ở ngoài màn hình gốc Ghi_Chu)
   final ValueNotifier<DriveFolderItem?> activeNotesFolderNotifier =
+      ValueNotifier<DriveFolderItem?>(null);
+
+  /// Thư mục con đang được chọn mở trong Tab Sổ dự giờ (null = đang ở ngoài màn hình gốc So_Du_Gio)
+  final ValueNotifier<DriveFolderItem?> activeObservationFolderNotifier =
       ValueNotifier<DriveFolderItem?>(null);
 
   /// Danh sách các mục (Thư mục + File ghi chú) hiển thị ở Tab Ghi chú hiện tại
@@ -120,6 +141,10 @@ class GoogleDriveDatasource {
   final ValueNotifier<String> notesSearchKeywordNotifier =
       ValueNotifier<String>('');
 
+  /// Từ khóa tìm kiếm hiện tại ở Tab Sổ dự giờ
+  final ValueNotifier<String> observationSearchKeywordNotifier =
+      ValueNotifier<String>('');
+
   /// Lấy email đang đăng nhập (từ phiên Google hoặc bộ nhớ duy trì đăng nhập)
   String get currentEmail => _currentUser?.email ?? _cachedEmail ?? '';
 
@@ -133,13 +158,14 @@ class GoogleDriveDatasource {
   /// Đối tượng DriveApi đã liên kết sẵn sàng để tạo thư mục / ghi đè file JSON
   drive.DriveApi? get driveApi => _driveApi;
 
-  /// Đường dẫn hiển thị hiện tại của Tab Ghi chú (ở ngoài màn hình chính hoặc trong thư mục đã chọn)
+  /// Đường dẫn hiển thị hiện tại của Tab Ghi chú (hỗ trợ hiển thị nhiều cấp thư mục)
   String get currentNotesPathLabel {
-    final activeFolder = activeNotesFolderNotifier.value;
-    if (activeFolder == null) {
+    if (_notesFolderStack.isEmpty) {
       return 'MeetingBook / Ghi_Chu';
     }
-    return 'MeetingBook / Ghi_Chu / ${activeFolder.displayName}';
+    final String subPath =
+        _notesFolderStack.map((f) => f.displayName).join(' / ');
+    return 'MeetingBook / Ghi_Chu / $subPath';
   }
 
   // ===========================================================================
@@ -360,22 +386,28 @@ class GoogleDriveDatasource {
   }
 
   // ===========================================================================
-  // 5. HÀM ĐIỀU HƯỚNG BẤM SỬ DỤNG THƯ MỤC TRONG TAB GHI CHÚ
+  // 5. HÀM ĐIỀU HƯỚNG BẤM SỬ DỤNG THƯ MỤC NHIỀU CẤP TRONG TAB GHI CHÚ & SỔ DỰ GIỜ
   // Công dụng:
-  // - Khi bấm vào một thư mục trên màn hình Ghi chú -> Mở vào bên trong thư mục đó
-  //   để xem danh sách các file ghi chú trong thư mục và tạo file mới ngay trong đó.
-  // - Khi bấm nút "Quay lại" -> Trở về màn hình gốc của Tab Ghi chú (MeetingBook/Ghi_Chu).
+  // - Khi bấm vào một thư mục -> Mở vào bên trong thư mục đó (hỗ trợ cả thư mục con
+  //   nằm trong thư mục cha nhiều cấp).
+  // - Khi bấm nút "Quay lại" -> Lùi về thư mục cha ngay trước đó hoặc màn hình gốc.
   // ===========================================================================
   Future<void> openNotesFolder(DriveFolderItem folder) async {
     if (!folder.isFolder) return;
-    activeNotesFolderNotifier.value = folder;
+    if (_notesFolderStack.isEmpty || _notesFolderStack.last.id != folder.id) {
+      _notesFolderStack.add(folder);
+    }
+    activeNotesFolderNotifier.value = _notesFolderStack.last;
     await refreshCurrentNotesView();
   }
 
-  /// Thoát khỏi thư mục đang mở để quay về màn hình chính của Tab Ghi chú
+  /// Thoát khỏi thư mục đang mở để lùi về thư mục cha trước đó (hoặc màn hình chính Ghi chú)
   Future<void> exitCurrentNotesFolder() async {
-    if (activeNotesFolderNotifier.value == null) return;
-    activeNotesFolderNotifier.value = null;
+    if (_notesFolderStack.isNotEmpty) {
+      _notesFolderStack.removeLast();
+    }
+    activeNotesFolderNotifier.value =
+        _notesFolderStack.isEmpty ? null : _notesFolderStack.last;
     await refreshCurrentNotesView();
   }
 
@@ -396,13 +428,52 @@ class GoogleDriveDatasource {
     }
   }
 
+  /// Mở vào bên trong 1 thư mục ở Tab Sổ dự giờ (hỗ trợ nhiều cấp thư mục)
+  Future<void> openObservationFolder(DriveFolderItem folder) async {
+    if (!folder.isFolder) return;
+    if (_observationFolderStack.isEmpty ||
+        _observationFolderStack.last.id != folder.id) {
+      _observationFolderStack.add(folder);
+    }
+    activeObservationFolderNotifier.value = _observationFolderStack.last;
+    await refreshCurrentObservationView();
+  }
+
+  /// Lùi khỏi thư mục đang mở ở Tab Sổ dự giờ về thư mục cha trước đó
+  Future<void> exitCurrentObservationFolder() async {
+    if (_observationFolderStack.isNotEmpty) {
+      _observationFolderStack.removeLast();
+    }
+    activeObservationFolderNotifier.value =
+        _observationFolderStack.isEmpty ? null : _observationFolderStack.last;
+    await refreshCurrentObservationView();
+  }
+
+  /// Làm mới danh sách các mục trong khung nhìn hiện tại của Tab Sổ dự giờ
+  Future<void> refreshCurrentObservationView() async {
+    isSyncingFoldersNotifier.value = true;
+    try {
+      await ensureAppFolderStructure();
+      final String targetParentId =
+          activeObservationFolderNotifier.value?.id ?? _observationTabFolderId!;
+      final items = await _fetchItemsInParent(targetParentId);
+      observationFoldersNotifier.value = items;
+    } catch (e) {
+      debugPrint('Lỗi tải danh sách mục trong Tab Sổ dự giờ: $e');
+      rethrow;
+    } finally {
+      isSyncingFoldersNotifier.value = false;
+    }
+  }
+
   // ===========================================================================
-  // 6. HÀM KIỂM TRA CHỐNG TRÙNG TÊN THƯ MỤC & TRÙNG TÊN FILE KHI TẠO MỚI
+  // 6. HÀM KIỂM TRA CHỐNG TRÙNG TÊN THƯ MỤC & TRÙNG TÊN FILE
   // ===========================================================================
   Future<bool> isItemNameDuplicate({
     required String parentFolderId,
     required String itemName,
     required bool isFolder,
+    String? excludeItemId,
   }) async {
     return _executeDriveCall((api) async {
       final String trimmedName = itemName.trim();
@@ -422,6 +493,9 @@ class GoogleDriveDatasource {
 
       final files = fileList.files ?? <drive.File>[];
       for (final file in files) {
+        if (excludeItemId != null && file.id == excludeItemId) {
+          continue;
+        }
         final String existingName = (file.name ?? '').trim();
         final String existingWithoutJson =
             existingName.toLowerCase().endsWith('.json')
@@ -446,25 +520,25 @@ class GoogleDriveDatasource {
     await ensureAppFolderStructure();
 
     final String trimmedName = folderName.trim();
-    // Nếu ở Tab Ghi chú và đang ở màn hình gốc -> tạo trong _notesTabFolderId
-    final String targetParentId =
-        tabIndex == 0 ? _notesTabFolderId! : _observationTabFolderId!;
+    // Nếu đang mở 1 thư mục con thì tạo thư mục mới ngay trong thư mục đang mở, ngược lại tạo ở gốc Tab
+    final String targetParentId = tabIndex == 0
+        ? (activeNotesFolderNotifier.value?.id ?? _notesTabFolderId!)
+        : (activeObservationFolderNotifier.value?.id ??
+            _observationTabFolderId!);
 
-    // Bước 1: Kiểm tra nhanh ngay trên danh sách RAM đang hiển thị (nếu đang ở gốc)
-    if (tabIndex != 0 || activeNotesFolderNotifier.value == null) {
-      final currentRamList = tabIndex == 0
-          ? notesFoldersNotifier.value
-          : observationFoldersNotifier.value;
-      final bool existsInRam = currentRamList.any(
-        (f) =>
-            f.isFolder &&
-            f.displayName.trim().toLowerCase() == trimmedName.toLowerCase(),
+    // Bước 1: Kiểm tra nhanh ngay trên danh sách RAM đang hiển thị
+    final currentRamList = tabIndex == 0
+        ? notesFoldersNotifier.value
+        : observationFoldersNotifier.value;
+    final bool existsInRam = currentRamList.any(
+      (f) =>
+          f.isFolder &&
+          f.displayName.trim().toLowerCase() == trimmedName.toLowerCase(),
+    );
+    if (existsInRam) {
+      throw DuplicateDriveItemException(
+        'Tên thư mục "$trimmedName" đã tồn tại! Vui lòng đặt tên khác.',
       );
-      if (existsInRam) {
-        throw DuplicateDriveItemException(
-          'Tên thư mục "$trimmedName" đã tồn tại! Vui lòng đặt tên khác.',
-        );
-      }
     }
 
     // Bước 2: Kiểm tra trên Google Drive phòng trường hợp tạo từ thiết bị khác
@@ -499,18 +573,12 @@ class GoogleDriveDatasource {
       parentFolderId: targetParentId,
     );
 
-    // Nếu người dùng đang ở bên trong 1 thư mục con mà bấm tạo thư mục mới -> đưa về gốc hoặc cập nhật
+    // Đưa thư mục mới lên đầu danh sách hiển thị hiện tại
     if (tabIndex == 0) {
-      if (activeNotesFolderNotifier.value == null) {
-        notesFoldersNotifier.value = <DriveFolderItem>[
-          newItem,
-          ...notesFoldersNotifier.value,
-        ];
-      } else {
-        // Nếu đang ở trong thư mục con mà tạo thư mục mới ở gốc thì quay ra gốc để thấy thư mục mới
-        activeNotesFolderNotifier.value = null;
-        await refreshCurrentNotesView();
-      }
+      notesFoldersNotifier.value = <DriveFolderItem>[
+        newItem,
+        ...notesFoldersNotifier.value,
+      ];
     } else {
       observationFoldersNotifier.value = <DriveFolderItem>[
         newItem,
@@ -666,10 +734,10 @@ class GoogleDriveDatasource {
   }
 
   // ===========================================================================
-  // HÀM ĐỔI TÊN, XÓA & DI CHUYỂN TỆP HOẶC THƯ MỤC TRÊN GOOGLE DRIVE
+  // HÀM ĐỔI TÊN, XÓA, DI CHUYỂN (CÂY THƯ MỤC) & HOÀN TÁC TRÊN GOOGLE DRIVE
   // ===========================================================================
 
-  /// 1. Đổi tên Thư mục hoặc Tệp ghi chú (.json)
+  /// 1. Đổi tên Thư mục hoặc Tệp ghi chú (.json) - Có kiểm tra chống trùng tên
   Future<void> renameItemInTab({
     required int tabIndex,
     required DriveFolderItem item,
@@ -681,20 +749,45 @@ class GoogleDriveDatasource {
         ? newName.trim().substring(0, newName.trim().length - 5)
         : newName.trim();
 
-    // Nếu người dùng nhập lại đúng tên cũ thì không cần gọi API
+    // Nếu người dùng giữ nguyên tên hiện tại (không phân biệt hoa thường) -> Báo trùng tên
     if (cleanBaseName.toLowerCase() == item.displayName.trim().toLowerCase()) {
-      return;
+      throw DuplicateDriveItemException(
+        item.isFolder
+            ? 'Tên thư mục "$cleanBaseName" trùng với tên hiện tại! Vui lòng đặt tên khác.'
+            : 'Tên tệp "$cleanBaseName" trùng với tên hiện tại! Vui lòng đặt tên khác.',
+      );
     }
 
     final String targetParentId = item.parentFolderId ??
         (tabIndex == 0
             ? (activeNotesFolderNotifier.value?.id ?? _notesTabFolderId!)
-            : _observationTabFolderId!);
+            : (activeObservationFolderNotifier.value?.id ??
+                _observationTabFolderId!));
 
+    // Bước 1: Kiểm tra nhanh trùng tên ngay trong danh sách RAM hiện tại
+    final notifier =
+        tabIndex == 0 ? notesFoldersNotifier : observationFoldersNotifier;
+    final bool duplicateInRam = notifier.value.any(
+      (current) =>
+          current.id != item.id &&
+          current.isFolder == item.isFolder &&
+          current.displayName.trim().toLowerCase() ==
+              cleanBaseName.toLowerCase(),
+    );
+    if (duplicateInRam) {
+      throw DuplicateDriveItemException(
+        item.isFolder
+            ? 'Tên thư mục "$cleanBaseName" đã tồn tại! Vui lòng đặt tên khác.'
+            : 'Tên tệp "$cleanBaseName" đã tồn tại! Vui lòng đặt tên khác.',
+      );
+    }
+
+    // Bước 2: Kiểm tra trùng tên trực tiếp trên Google Drive
     final bool isDuplicate = await isItemNameDuplicate(
       parentFolderId: targetParentId,
       itemName: cleanBaseName,
       isFolder: item.isFolder,
+      excludeItemId: item.id,
     );
     if (isDuplicate) {
       throw DuplicateDriveItemException(
@@ -725,8 +818,6 @@ class GoogleDriveDatasource {
       }
     }
 
-    final notifier =
-        tabIndex == 0 ? notesFoldersNotifier : observationFoldersNotifier;
     notifier.value = notifier.value
         .map(
           (current) => current.id == item.id
@@ -759,52 +850,155 @@ class GoogleDriveDatasource {
         notifier.value.where((current) => current.id != item.id).toList();
   }
 
-  /// 3. Lấy danh sách các thư mục đích có thể chuyển Tệp / Thư mục tới
-  Future<List<DriveFolderItem>> fetchAvailableMoveFolders({
+  /// 2b. Hoàn tác Xóa (Khôi phục Thư mục hoặc Tệp từ thùng rác Google Drive về lại danh sách)
+  Future<void> restoreDeletedItemInTab({
+    required int tabIndex,
+    required DriveFolderItem item,
+  }) async {
+    final drive.File restoreMeta = drive.File()..trashed = false;
+    await _executeDriveCall(
+      (api) => api.files.update(restoreMeta, item.id),
+    );
+
+    _insertItemBackIntoRamList(tabIndex: tabIndex, item: item);
+  }
+
+  /// Chèn mục vừa hoàn tác về lại đúng vị trí trong danh sách RAM (Thư mục đứng trước, Tệp đứng sau)
+  void _insertItemBackIntoRamList({
+    required int tabIndex,
+    required DriveFolderItem item,
+  }) {
+    final String currentViewParentId = tabIndex == 0
+        ? (activeNotesFolderNotifier.value?.id ?? (_notesTabFolderId ?? ''))
+        : (activeObservationFolderNotifier.value?.id ??
+            (_observationTabFolderId ?? ''));
+
+    final String itemParentId = item.parentFolderId ?? currentViewParentId;
+    if (currentViewParentId.isNotEmpty && itemParentId != currentViewParentId) {
+      return;
+    }
+
+    final notifier =
+        tabIndex == 0 ? notesFoldersNotifier : observationFoldersNotifier;
+    if (notifier.value.any((e) => e.id == item.id)) {
+      return;
+    }
+
+    final List<DriveFolderItem> currentList =
+        List<DriveFolderItem>.from(notifier.value);
+    if (item.isFolder) {
+      currentList.insert(0, item);
+    } else {
+      final int firstFileIdx =
+          currentList.indexWhere((element) => !element.isFolder);
+      if (firstFileIdx == -1) {
+        currentList.add(item);
+      } else {
+        currentList.insert(firstFileIdx, item);
+      }
+    }
+    notifier.value = currentList;
+  }
+
+  /// 3. Xây dựng Cây thư mục đa cấp (Folder Tree) kiểu Google Drive để người dùng chọn nơi Di chuyển
+  /// - Cho phép chuyển Thư mục này vào Thư mục khác (nhiều cấp) hoặc chuyển Tệp vào bất kỳ Thư mục nào.
+  /// - Tự động loại bỏ chính thư mục đang di chuyển và toàn bộ thư mục con của nó.
+  Future<DriveFolderTreeNode> fetchFolderTreeForMove({
     required int tabIndex,
     required DriveFolderItem itemToMove,
   }) async {
     await ensureAppFolderStructure();
+
     final String rootTabId =
         tabIndex == 0 ? _notesTabFolderId! : _observationTabFolderId!;
     final String currentParentId = itemToMove.parentFolderId ??
         (tabIndex == 0
             ? (activeNotesFolderNotifier.value?.id ?? rootTabId)
-            : rootTabId);
+            : (activeObservationFolderNotifier.value?.id ?? rootTabId));
 
-    // Lấy toàn bộ thư mục con ở cấp gốc của Tab
-    final List<DriveFolderItem> allFoldersInTab = await _fetchItemsInParent(
-      rootTabId,
-      foldersOnly: true,
-    );
+    // Tải toàn bộ danh sách thư mục không nằm trong thùng rác bằng 1 lần gọi API duy nhất
+    final List<drive.File> allDriveFolders =
+        await _executeDriveCall((api) async {
+      final List<drive.File> collected = <drive.File>[];
+      String? pageToken;
+      do {
+        final drive.FileList list = await api.files.list(
+          q: "mimeType = '$_folderMimeType' and trashed = false",
+          spaces: 'drive',
+          orderBy: 'createdTime desc',
+          pageSize: 500,
+          pageToken: pageToken,
+          $fields: 'nextPageToken, files(id, name, parents, createdTime)',
+        );
+        if (list.files != null) {
+          collected.addAll(list.files!);
+        }
+        pageToken = list.nextPageToken;
+      } while (pageToken != null && pageToken.isNotEmpty);
+      return collected;
+    });
 
-    final List<DriveFolderItem> targets = <DriveFolderItem>[];
+    // Gom nhóm các thư mục con theo ID thư mục cha
+    final Map<String, List<DriveFolderItem>> childrenByParentId =
+        <String, List<DriveFolderItem>>{};
+    for (final f in allDriveFolders) {
+      final String folderId = f.id ?? '';
+      if (folderId.isEmpty) continue;
+      // Không cho phép chuyển một thư mục vào chính nó hoặc vào các thư mục con bên trong nó
+      if (itemToMove.isFolder && folderId == itemToMove.id) {
+        continue;
+      }
 
-    // Nếu mục này đang nằm trong 1 thư mục con -> Cho phép chuyển ra ngoài màn hình chính
-    if (currentParentId != rootTabId) {
-      targets.add(
-        DriveFolderItem(
-          id: rootTabId,
-          name: tabIndex == 0
-              ? 'Màn hình chính (MeetingBook / Ghi_Chu)'
-              : 'Màn hình chính (MeetingBook / So_Du_Gio)',
+      final List<String> parents = f.parents ?? const <String>[];
+      for (final String pId in parents) {
+        final folderItem = DriveFolderItem(
+          id: folderId,
+          name: f.name ?? 'Thư mục không tên',
+          createdTime: f.createdTime,
           isFolder: true,
-        ),
-      );
-    }
-
-    // Thêm các thư mục khác (trừ chính nó và trừ thư mục đang chứa nó)
-    for (final folder in allFoldersInTab) {
-      if (folder.id != itemToMove.id && folder.id != currentParentId) {
-        targets.add(folder);
+          parentFolderId: pId,
+        );
+        childrenByParentId
+            .putIfAbsent(pId, () => <DriveFolderItem>[])
+            .add(folderItem);
       }
     }
 
-    return targets;
+    // Hàm đệ quy dựng cây thư mục nhiều cấp (chống vòng lặp bằng visitedIds)
+    final Set<String> visitedIds = <String>{};
+    DriveFolderTreeNode buildSubtree(DriveFolderItem currentFolder) {
+      visitedIds.add(currentFolder.id);
+      final List<DriveFolderItem> rawChildren =
+          childrenByParentId[currentFolder.id] ?? const <DriveFolderItem>[];
+      final List<DriveFolderTreeNode> childNodes = <DriveFolderTreeNode>[];
+
+      for (final child in rawChildren) {
+        if (visitedIds.contains(child.id)) continue;
+        if (itemToMove.isFolder && child.id == itemToMove.id) continue;
+        childNodes.add(buildSubtree(child));
+      }
+
+      return DriveFolderTreeNode(
+        folder: currentFolder,
+        children: childNodes,
+        isCurrentParent: currentFolder.id == currentParentId,
+      );
+    }
+
+    final DriveFolderItem rootFolderItem = DriveFolderItem(
+      id: rootTabId,
+      name: tabIndex == 0
+          ? 'Thư mục gốc (MeetingBook / Ghi_Chu)'
+          : 'Thư mục gốc (MeetingBook / So_Du_Gio)',
+      isFolder: true,
+    );
+
+    return buildSubtree(rootFolderItem);
   }
 
-  /// Thực thi di chuyển Tệp hoặc Thư mục sang thư mục đích trên Google Drive
-  Future<void> moveItemInTab({
+  /// 4. Thực thi di chuyển Tệp hoặc Thư mục sang thư mục đích trên Google Drive
+  /// Trả về `oldParentId` để hỗ trợ nút "Hoàn tác" khôi phục về vị trí cũ.
+  Future<String> moveItemInTab({
     required int tabIndex,
     required DriveFolderItem item,
     required String targetFolderId,
@@ -816,10 +1010,12 @@ class GoogleDriveDatasource {
     final String oldParentId = item.parentFolderId ??
         (tabIndex == 0
             ? (activeNotesFolderNotifier.value?.id ?? rootTabId)
-            : rootTabId);
+            : (activeObservationFolderNotifier.value?.id ?? rootTabId));
 
     if (oldParentId == targetFolderId) {
-      return;
+      throw const DuplicateDriveItemException(
+        'Mục này đang nằm sẵn trong thư mục đã chọn! Vui lòng chọn thư mục khác.',
+      );
     }
 
     // Kiểm tra chống trùng tên trong thư mục đích trước khi di chuyển
@@ -827,6 +1023,7 @@ class GoogleDriveDatasource {
       parentFolderId: targetFolderId,
       itemName: item.displayName,
       isFolder: item.isFolder,
+      excludeItemId: item.id,
     );
     if (isDuplicateInTarget) {
       throw DuplicateDriveItemException(
@@ -851,6 +1048,39 @@ class GoogleDriveDatasource {
         tabIndex == 0 ? notesFoldersNotifier : observationFoldersNotifier;
     notifier.value =
         notifier.value.where((current) => current.id != item.id).toList();
+
+    return oldParentId;
+  }
+
+  /// 4b. Hoàn tác Di chuyển (Chuyển Tệp hoặc Thư mục ngược về lại thư mục cha ban đầu)
+  Future<void> undoMoveItemInTab({
+    required int tabIndex,
+    required DriveFolderItem item,
+    required String currentTargetFolderId,
+    required String previousParentId,
+  }) async {
+    if (currentTargetFolderId == previousParentId) return;
+
+    await _executeDriveCall(
+      (api) => api.files.update(
+        drive.File(),
+        item.id,
+        addParents: previousParentId,
+        removeParents: currentTargetFolderId,
+        $fields: 'id, parents',
+      ),
+    );
+
+    final DriveFolderItem restoredItem = DriveFolderItem(
+      id: item.id,
+      name: item.name,
+      createdTime: item.createdTime,
+      isFolder: item.isFolder,
+      parentFolderId: previousParentId,
+      paperTemplate: item.paperTemplate,
+    );
+
+    _insertItemBackIntoRamList(tabIndex: tabIndex, item: restoredItem);
   }
 
   // ===========================================================================
@@ -970,10 +1200,12 @@ class GoogleDriveDatasource {
 
       final String notesParentId =
           activeNotesFolderNotifier.value?.id ?? _notesTabFolderId!;
+      final String observationParentId =
+          activeObservationFolderNotifier.value?.id ?? _observationTabFolderId!;
 
       final results = await Future.wait([
         _fetchItemsInParent(notesParentId),
-        _fetchItemsInParent(_observationTabFolderId!, foldersOnly: true),
+        _fetchItemsInParent(observationParentId),
       ]);
       notesFoldersNotifier.value = results[0];
       observationFoldersNotifier.value = results[1];
@@ -1059,7 +1291,10 @@ class GoogleDriveDatasource {
     _rootMeetingBookFolderId = null;
     _notesTabFolderId = null;
     _observationTabFolderId = null;
+    _notesFolderStack.clear();
+    _observationFolderStack.clear();
     activeNotesFolderNotifier.value = null;
+    activeObservationFolderNotifier.value = null;
     notesFoldersNotifier.value = [];
     observationFoldersNotifier.value = [];
 

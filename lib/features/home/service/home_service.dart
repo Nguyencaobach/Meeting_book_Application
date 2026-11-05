@@ -111,6 +111,8 @@ class HomeService {
   void handleSearchChanged(String keyword, int currentTabIndex) {
     if (currentTabIndex == 0) {
       _driveDatasource.notesSearchKeywordNotifier.value = keyword;
+    } else {
+      _driveDatasource.observationSearchKeywordNotifier.value = keyword;
     }
   }
 }

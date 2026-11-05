@@ -1675,6 +1675,16 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                               horizontalPadding: horizontalPadding,
                               rowTextStyle: effectiveRowTextStyle,
                             ),
+                    onHorizontalDragUpdate: (_isViewOnlyMode ||
+                            (!isRowSelected && !_isPenMode))
+                        ? null
+                        : (DragUpdateDetails details) => _handleSelectRow(
+                              rowIndex,
+                              rowHeight,
+                              tapLocalDx: details.localPosition.dx,
+                              horizontalPadding: horizontalPadding,
+                              rowTextStyle: effectiveRowTextStyle,
+                            ),
                     child: Container(
                       width: paperWidth,
                       height: rowHeight,
@@ -1684,59 +1694,123 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                       padding: EdgeInsets.symmetric(
                         horizontal: horizontalPadding,
                       ),
-                      child: Align(
+                      child: Stack(
+                        clipBehavior: Clip.none,
                         alignment: Alignment.bottomLeft,
-                        child: IgnorePointer(
-                          // Các dòng chưa chọn sẽ không chặn thao tác giữ chuột kéo trang khi đang Zoom
-                          ignoring: _isViewOnlyMode || !isRowSelected,
-                          child: TextField(
-                            controller: controller,
-                            focusNode: focusNode,
-                            readOnly:
-                                _isViewOnlyMode || _isPenMode || hasRamError,
-                            showCursor:
-                                (_isKeyboardMode || _isPenMode) && isRowSelected,
-                            cursorColor: AppColors.primaryBlue,
-                            cursorWidth: 2.2,
-                            maxLines: 1,
-                            // Khóa cuộn ngang nội bộ của TextField để chữ không bao giờ chạy dài vô tận trên 1 dòng
-                            scrollPhysics: const NeverScrollableScrollPhysics(),
-                            textInputAction: TextInputAction.next,
-                            onTap: _isViewOnlyMode
-                                ? null
-                                : () => _handleSelectRow(rowIndex, rowHeight),
-                            onChanged: (value) => _onRowTextChanged(
-                              rowIndex,
-                              value,
-                              maxLineTextWidth: maxLineTextWidth,
-                              rowTextStyle: effectiveRowTextStyle,
-                              rowHeight: rowHeight,
-                            ),
-                            onSubmitted: (_) {
-                              // Khi bấm Enter -> Tự động xuống dòng kẻ ngang tiếp theo (rowIndex + 1)
-                              _handleSelectRow(rowIndex + 1, rowHeight);
-                            },
-                            style: effectiveRowTextStyle,
-                            decoration: InputDecoration(
-                              isDense: true,
-                              border: InputBorder.none,
-                              enabledBorder: InputBorder.none,
-                              focusedBorder: InputBorder.none,
-                              contentPadding: EdgeInsets.only(
-                                bottom: rowHeight * 0.14,
-                              ),
-                              hintText: (rowIndex == 0 && !_isViewOnlyMode)
-                                  ? 'Chạm vào dòng kẻ ngang để viết nội dung...'
-                                  : null,
-                              hintStyle: TextStyle(
-                                color: AppColors.primaryBlue
-                                    .withValues(alpha: 0.35),
-                                fontSize: lineFontSize * 0.92,
-                                fontWeight: FontWeight.w400,
+                        children: [
+                          Align(
+                            alignment: Alignment.bottomLeft,
+                            child: IgnorePointer(
+                              // Các dòng chưa chọn hoặc đang ở chế độ Viết bút sẽ để GestureDetector bên ngoài bắt điểm trỏ & kéo con trỏ
+                              ignoring: _isViewOnlyMode ||
+                                  !isRowSelected ||
+                                  _isPenMode,
+                              child: TextField(
+                                controller: controller,
+                                focusNode: focusNode,
+                                readOnly: _isViewOnlyMode ||
+                                    _isPenMode ||
+                                    hasRamError,
+                                showCursor: _isKeyboardMode && isRowSelected,
+                                cursorColor: AppColors.primaryBlue,
+                                cursorWidth: 2.2,
+                                maxLines: 1,
+                                // Khóa cuộn ngang nội bộ của TextField để chữ không bao giờ chạy dài vô tận trên 1 dòng
+                                scrollPhysics:
+                                    const NeverScrollableScrollPhysics(),
+                                textInputAction: TextInputAction.next,
+                                onTap: _isViewOnlyMode
+                                    ? null
+                                    : () =>
+                                        _handleSelectRow(rowIndex, rowHeight),
+                                onChanged: (value) => _onRowTextChanged(
+                                  rowIndex,
+                                  value,
+                                  maxLineTextWidth: maxLineTextWidth,
+                                  rowTextStyle: effectiveRowTextStyle,
+                                  rowHeight: rowHeight,
+                                ),
+                                onSubmitted: (_) {
+                                  // Khi bấm Enter -> Tự động xuống dòng kẻ ngang tiếp theo (rowIndex + 1)
+                                  _handleSelectRow(rowIndex + 1, rowHeight);
+                                },
+                                style: effectiveRowTextStyle,
+                                decoration: InputDecoration(
+                                  isDense: true,
+                                  border: InputBorder.none,
+                                  enabledBorder: InputBorder.none,
+                                  focusedBorder: InputBorder.none,
+                                  contentPadding: EdgeInsets.only(
+                                    bottom: rowHeight * 0.14,
+                                  ),
+                                  hintText: (rowIndex == 0 && !_isViewOnlyMode)
+                                      ? 'Chạm vào dòng kẻ ngang để viết nội dung...'
+                                      : null,
+                                  hintStyle: TextStyle(
+                                    color: AppColors.primaryBlue
+                                        .withValues(alpha: 0.35),
+                                    fontSize: lineFontSize * 0.92,
+                                    fontWeight: FontWeight.w400,
+                                  ),
+                                ),
                               ),
                             ),
                           ),
-                        ),
+
+                          // Con trỏ + nút nắm kéo (Handle) hiển thị trực quan trên dòng đang chọn ở chế độ Viết bút
+                          if (isRowSelected && _isPenMode)
+                            ValueListenableBuilder<TextEditingValue>(
+                              valueListenable: controller,
+                              builder: (context, textValue, _) {
+                                final String clean = _cleanText(textValue.text);
+                                final int cleanCursor =
+                                    _getRowCleanCursorOffset(rowIndex)
+                                        .clamp(0, clean.length);
+                                final String textBeforeCursor =
+                                    clean.substring(0, cleanCursor);
+                                final double cursorX = _measureTextWidth(
+                                  textBeforeCursor,
+                                  effectiveRowTextStyle,
+                                ).clamp(0.0, maxLineTextWidth);
+
+                                return Positioned(
+                                  left: (cursorX - 5.0)
+                                      .clamp(-5.0, maxLineTextWidth - 5.0),
+                                  bottom: rowHeight * 0.04,
+                                  child: IgnorePointer(
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        // Thanh dọc con trỏ |
+                                        Container(
+                                          width: 2.4,
+                                          height: rowHeight * 0.58,
+                                          decoration: BoxDecoration(
+                                            color: AppColors.primaryBlue,
+                                            borderRadius:
+                                                BorderRadius.circular(2),
+                                          ),
+                                        ),
+                                        // Đầu nắm tròn dưới chân con trỏ để người dùng dễ nhìn và kéo ngang
+                                        Container(
+                                          width: 10,
+                                          height: 10,
+                                          decoration: BoxDecoration(
+                                            color: AppColors.primaryBlue,
+                                            shape: BoxShape.circle,
+                                            border: Border.all(
+                                              color: AppColors.basicWhite,
+                                              width: 1.5,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                        ],
                       ),
                     ),
                   );

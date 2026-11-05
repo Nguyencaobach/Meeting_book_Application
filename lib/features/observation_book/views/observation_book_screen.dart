@@ -10,14 +10,37 @@ class ObservationBookScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final driveDatasource = GoogleDriveDatasource.instance;
 
-    return DriveFolderSectionWidget(
-      tabIndex: 1,
-      foldersListenable: driveDatasource.observationFoldersNotifier,
-      onRefresh: () => driveDatasource.refreshAllTabFolders(),
-      emptyMessage:
-          'Chưa có thư mục hay sổ dự giờ nào.\nBấm nút (+) góc dưới bên phải để tạo mới.',
-      onFolderTap: (folder) {
-        // Xử lý mở thư mục con sau này
+    return ValueListenableBuilder<DriveFolderItem?>(
+      valueListenable: driveDatasource.activeObservationFolderNotifier,
+      builder: (context, activeFolder, _) {
+        final bool isInsideFolder = activeFolder != null;
+
+        return PopScope(
+          canPop: !isInsideFolder,
+          onPopInvokedWithResult: (didPop, _) {
+            if (!didPop && isInsideFolder) {
+              driveDatasource.exitCurrentObservationFolder();
+            }
+          },
+          child: DriveFolderSectionWidget(
+            tabIndex: 1,
+            foldersListenable: driveDatasource.observationFoldersNotifier,
+            activeFolderListenable:
+                driveDatasource.activeObservationFolderNotifier,
+            searchKeywordListenable:
+                driveDatasource.observationSearchKeywordNotifier,
+            onRefresh: () => driveDatasource.refreshCurrentObservationView(),
+            onExitFolder: () => driveDatasource.exitCurrentObservationFolder(),
+            emptyMessage: isInsideFolder
+                ? 'Thư mục "${activeFolder.displayName}" chưa có mục nào.\nBấm nút (+) góc dưới bên phải để tạo mới.'
+                : 'Chưa có thư mục hay sổ dự giờ nào.\nBấm nút (+) góc dưới bên phải để tạo mới.',
+            onFolderTap: (folder) {
+              if (folder.isFolder) {
+                driveDatasource.openObservationFolder(folder);
+              }
+            },
+          ),
+        );
       },
     );
   }
