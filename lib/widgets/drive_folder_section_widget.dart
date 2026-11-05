@@ -126,74 +126,74 @@ class _DriveFolderSectionWidgetState extends State<DriveFolderSectionWidget> {
                 ),
                 child: Row(
                   children: [
-                    // Hiển thị thanh điều hướng thư mục đang chọn (nếu có)
-                    Expanded(
-                      child: widget.activeFolderListenable != null
-                          ? ValueListenableBuilder<DriveFolderItem?>(
-                              valueListenable: widget.activeFolderListenable!,
-                              builder: (context, activeFolder, _) {
-                                if (activeFolder == null) {
-                                  return const SizedBox.shrink();
-                                }
-                                return Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    InkWell(
+                    // Hiển thị thanh điều hướng thư mục đang chọn (Giới hạn tối đa tới 1 nửa màn hình)
+                    if (widget.activeFolderListenable != null)
+                      ValueListenableBuilder<DriveFolderItem?>(
+                        valueListenable: widget.activeFolderListenable!,
+                        builder: (context, activeFolder, _) {
+                          if (activeFolder == null) {
+                            return const SizedBox.shrink();
+                          }
+                          return ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxWidth: constraints.maxWidth * 0.5,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                InkWell(
+                                  borderRadius: BorderRadius.circular(20),
+                                  onTap: widget.onExitFolder,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 6,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.primaryBlue,
                                       borderRadius: BorderRadius.circular(20),
-                                      onTap: widget.onExitFolder,
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 12,
-                                          vertical: 6,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: AppColors.primaryBlue,
-                                          borderRadius:
-                                              BorderRadius.circular(20),
-                                        ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            const Icon(
-                                              Icons.arrow_back_rounded,
-                                              color: AppColors.basicWhite,
-                                              size: 18,
-                                            ),
-                                            const SizedBox(width: 6),
-                                            Text(
-                                              'Quay lại',
-                                              style: TextStyle(
-                                                color: AppColors.basicWhite,
-                                                fontSize:
-                                                    headerLabelSize * 0.92,
-                                                fontWeight: FontWeight.w700,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
                                     ),
-                                    const SizedBox(width: 10),
-                                    Flexible(
-                                      child: Text(
-                                        'Thư mục: ${activeFolder.displayName}',
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          color: AppColors.primaryBlue,
-                                          fontSize: headerLabelSize,
-                                          fontWeight: FontWeight.w700,
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        const Icon(
+                                          Icons.arrow_back_rounded,
+                                          color: AppColors.basicWhite,
+                                          size: 18,
                                         ),
-                                      ),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          'Quay lại',
+                                          style: TextStyle(
+                                            color: AppColors.basicWhite,
+                                            fontSize: headerLabelSize * 0.92,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                  ],
-                                );
-                              },
-                            )
-                          : const SizedBox.shrink(),
-                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Flexible(
+                                  child: Text(
+                                    'Thư mục: ${activeFolder.displayName}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: AppColors.primaryBlue,
+                                      fontSize: headerLabelSize,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
 
-                    const SizedBox(width: 8),
+                    const Spacer(),
 
                     // Nút "Làm mới" để tự động tải lại danh sách từ Google Drive
                     ValueListenableBuilder<bool>(

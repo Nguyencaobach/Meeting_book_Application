@@ -17,13 +17,18 @@ class Note4x {
   static const String templateId = 'note4x';
 
   /// Tên hiển thị cho người dùng khi chọn loại vở
-  static const String displayName = 'Vở 4 ô ly (note4x)';
+  static const String displayName = 'Vở 4 ô ly';
 
   /// Số đơn vị ô ly cấu thành 1 dòng viết của vở 4 ô ly
   static const int oliUnitsPerRow = 4;
 
   /// Số dòng mặc định tối thiểu trên 1 trang giấy
   static const int defaultLineCount = 28;
+
+  /// Chiều ngang tối thiểu chuẩn của trang giấy vở (đơn vị logic dp).
+  /// - Mọi máy tính bảng (dọc >= 540dp & ngang) và điện thoại xoay ngang đều hiển thị trọn chiều ngang màn hình.
+  /// - Màn hình điện thoại nhỏ xoay dọc (< 540dp) sẽ bật thêm thanh cuộn trái/phải.
+  static const double minPaperWidth = 540.0;
 
   // ===========================================================================
   // CÁC HÀM MÀU SẮC THEO THEME (APPCOLORS)
@@ -34,14 +39,14 @@ class Note4x {
     return AppColors.creamBackground;
   }
 
-  /// Hàm lấy màu đường kẻ ngang chính (dòng viết) theo màu xanh chủ đạo Theme (#263BAA)
+  /// Hàm lấy màu đường kẻ ngang chính tạo ra mỗi ô ly lớn (Đậm màu rõ nét theo Theme #263BAA)
   static Color getHorizontalLineColor() {
-    return AppColors.primaryBlue.withValues(alpha: 0.42);
+    return AppColors.primaryBlue.withValues(alpha: 0.72);
   }
 
-  /// Hàm lấy màu đường kẻ ngang phụ (chia 4 nhịp ô ly mảnh) theo màu xanh Theme
+  /// Hàm lấy màu đường kẻ ngang phụ bên trong ô (Mờ màu đồng đều theo Theme #263BAA)
   static Color getSubHorizontalLineColor() {
-    return AppColors.primaryBlue.withValues(alpha: 0.12);
+    return AppColors.primaryBlue.withValues(alpha: 0.20);
   }
 
   /// Hàm lấy màu đường kẻ tiêu đề đầu trang theo màu xanh chủ đạo Theme
@@ -67,10 +72,10 @@ class Note4x {
     final double referenceWidth = maxWidth ?? screenSize.width;
     final double shortestSide = screenSize.shortestSide;
 
-    // Tự động co giãn mượt theo cả chiều ngang khung giấy và cạnh ngắn thiết bị
+    // Làm tròn số nguyên pixel để mọi khoảng chia 4 ô ly đều nhau tuyệt đối, không bị lệch sub-pixel
     final double baseUnit =
-        (referenceWidth * 0.0085 + shortestSide * 0.0065).clamp(9.2, 13.2);
-    return baseUnit;
+        (referenceWidth * 0.0085 + shortestSide * 0.0065).clamp(9.0, 13.0);
+    return baseUnit.roundToDouble();
   }
 
   /// Tính khoảng cách dòng viết (chiều cao 1 dòng ngang = 4 đơn vị ô ly * unitHeight)
@@ -86,9 +91,16 @@ class Note4x {
     return unitHeight * oliUnitsPerRow;
   }
 
-  /// Tính khoảng lề ngang hai bên trang giấy tự động co giãn theo màn hình
+  /// Tính khoảng lề ngang hai bên trang giấy cân đối theo chuẩn trang Word (vừa vặn cả dọc lẫn ngang)
   static double getResponsiveHorizontalPadding(double maxWidth) {
-    return (maxWidth * 0.045).clamp(16.0, 44.0);
+    return (maxWidth * 0.022).clamp(14.0, 22.0);
+  }
+
+  /// Tính chiều ngang chuẩn của trang giấy phụ thuộc vào màn hình máy:
+  /// - Nếu màn hình đủ to (>= minPaperWidth): hiển thị toàn bộ chiều ngang giấy theo màn hình.
+  /// - Nếu màn hình nhỏ (< minPaperWidth): giữ chiều ngang giấy = minPaperWidth để dùng con lăn kéo qua lại.
+  static double getResponsivePaperWidth(double viewportWidth) {
+    return viewportWidth >= minPaperWidth ? viewportWidth : minPaperWidth;
   }
 }
 
@@ -117,28 +129,30 @@ class Note4xHorizontalPaperPainter extends CustomPainter {
       ..style = PaintingStyle.fill;
     canvas.drawRect(Offset.zero & size, bgPaint);
 
-    // 2. Bút vẽ đường kẻ ngang chính (dòng để viết) theo màu Theme
+    // 2. Bút vẽ đường kẻ ngang chính tạo mỗi ô ly lớn (Đậm màu, đều nét)
     final Paint mainLinePaint = Paint()
       ..color = Note4x.getHorizontalLineColor()
-      ..strokeWidth = 1.25
+      ..strokeWidth = 1.5
+      ..isAntiAlias = false
       ..style = PaintingStyle.stroke;
 
-    // 3. Bút vẽ đường kẻ ngang phụ chia 4 khoảng ô ly mảnh theo màu Theme
+    // 3. Bút vẽ đường kẻ ngang phụ bên trong ô (Mờ màu đồng đều 100% giữa các dòng)
     final Paint subLinePaint = Paint()
       ..color = Note4x.getSubHorizontalLineColor()
-      ..strokeWidth = 0.65
+      ..strokeWidth = 1.0
+      ..isAntiAlias = false
       ..style = PaintingStyle.stroke;
 
     final double subStep = rowHeight / Note4x.oliUnitsPerRow;
 
     for (int row = 0; row < totalRows; row++) {
       final double rowTop = row * rowHeight;
-      final double rowBottom = (row + 1) * rowHeight;
+      final double rowBottom = ((row + 1) * rowHeight).roundToDouble();
 
-      // Vẽ các đường ngang phụ mảnh bên trong 1 dòng 4 ô ly (chỉ vẽ đường ngang)
+      // Vẽ 3 đường ngang phụ mờ đều bên trong mỗi ô 4 ô ly
       if (showSubLines) {
         for (int sub = 1; sub < Note4x.oliUnitsPerRow; sub++) {
-          final double subY = rowTop + (sub * subStep);
+          final double subY = (rowTop + (sub * subStep)).roundToDouble();
           if (subY <= size.height) {
             canvas.drawLine(
               Offset(0, subY),
@@ -149,7 +163,7 @@ class Note4xHorizontalPaperPainter extends CustomPainter {
         }
       }
 
-      // Vẽ đường kẻ ngang chính ở đáy mỗi dòng để viết chữ lên trên
+      // Vẽ đường kẻ ngang chính đậm màu ở đáy mỗi dòng lớn
       if (rowBottom <= size.height) {
         canvas.drawLine(
           Offset(0, rowBottom),

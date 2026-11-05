@@ -610,18 +610,23 @@ class GoogleDriveDatasource {
   // ===========================================================================
   // 9. HÀM TẢI NỘI DUNG JSON CỦA FILE GHI CHÚ ĐỂ RENDER LÊN GIAO DIỆN VỞ
   // Công dụng:
-  // - Ưu tiên đọc từ bộ nhớ đệm RAM/Local (nếu người dùng vừa viết xong).
-  // - Nếu chưa có trong RAM thì tải trực tiếp nội dung file .json từ Google Drive
-  //   về và chuyển thành NotebookModel để giao diện render từng dòng chữ.
+  // - Ưu tiên đọc từ bộ nhớ đệm RAM (nếu người dùng vừa viết xong và không bấm Làm mới).
+  // - Nếu chưa có trong RAM hoặc khi bấm nút "Làm mới" (forceRefreshFromDrive = true)
+  //   thì tải trực tiếp nội dung file .json mới nhất từ Google Drive về.
   // ===========================================================================
-  Future<NotebookModel> loadNoteJsonFile(DriveFolderItem fileItem) async {
-    // 1. Kiểm tra trong RAM hoặc bộ đệm Local trước
-    final Map<String, dynamic>? cachedJson =
-        await LocalStorageDatasource.instance.getFromRamOrLocalBuffer(
-      fileItem.id,
-    );
-    if (cachedJson != null) {
-      return NotebookModel.fromJson(cachedJson);
+  Future<NotebookModel> loadNoteJsonFile(
+    DriveFolderItem fileItem, {
+    bool forceRefreshFromDrive = false,
+  }) async {
+    // 1. Kiểm tra trong RAM trước (bỏ qua nếu người dùng chủ động bấm "Làm mới")
+    if (!forceRefreshFromDrive) {
+      final Map<String, dynamic>? cachedJson =
+          await LocalStorageDatasource.instance.getFromRamOrLocalBuffer(
+        fileItem.id,
+      );
+      if (cachedJson != null) {
+        return NotebookModel.fromJson(cachedJson);
+      }
     }
 
     // 2. Gọi Google Drive API để tải nội dung file JSON về

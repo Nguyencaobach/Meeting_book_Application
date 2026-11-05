@@ -62,6 +62,10 @@ class DataSyncRepository with WidgetsBindingObserver {
   final ValueNotifier<bool> isSyncingDriveNotifier =
       ValueNotifier<bool>(false);
 
+  /// Trạng thái lỗi bộ nhớ RAM/Local (nếu true -> chặn chọn dòng viết và báo "Có lỗi bộ nhớ" màu đỏ)
+  final ValueNotifier<bool> hasRamErrorNotifier =
+      ValueNotifier<bool>(false);
+
   // ===========================================================================
   // LẮNG NGHE KẾT NỐI MẠNG LIÊN TỤC (ĐỂ KHÓA THAO TÁC KHI ĐỨT MẠNG GIỮA CHỪNG)
   // ===========================================================================
@@ -102,10 +106,19 @@ class DataSyncRepository with WidgetsBindingObserver {
     _isDirty = true;
 
     // 1. Lưu ngay lập tức vào RAM và bộ đệm Local của máy (0ms)
-    await _localDatasource.saveToRamAndLocalBuffer(
-      documentId: documentId,
-      jsonData: _latestJsonInRam!,
-    );
+    try {
+      await _localDatasource.saveToRamAndLocalBuffer(
+        documentId: documentId,
+        jsonData: _latestJsonInRam!,
+      );
+      if (hasRamErrorNotifier.value) {
+        hasRamErrorNotifier.value = false;
+      }
+    } catch (e) {
+      debugPrint('Lỗi lưu vào bộ nhớ RAM/Local: $e');
+      hasRamErrorNotifier.value = true;
+      rethrow;
+    }
 
     // 2. Nếu bộ đếm 30 giây đang chạy mà chưa hết -> Hủy bộ đếm cũ và đếm lại 30 giây từ đầu
     _syncDebounceTimer?.cancel();
@@ -115,6 +128,14 @@ class DataSyncRepository with WidgetsBindingObserver {
         _triggerDriveOverwriteNow();
       }
     });
+  }
+
+  // ===========================================================================
+  // TẠM DỪNG BỘ ĐẾM ĐỒNG BỘ KHI CHUYỂN SANG CHẾ ĐỘ "CHỈ XEM" (TIẾT KIỆM API)
+  // ===========================================================================
+  void cancelPendingSyncTimer() {
+    _syncDebounceTimer?.cancel();
+    _syncDebounceTimer = null;
   }
 
   // ===========================================================================

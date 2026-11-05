@@ -4,6 +4,7 @@
 1. Phải dùng các thuộc tính tự co dãn
 2. Phải dùng theo màu theme
 3. Phải dùng bộ font chữ theo theme (`Be Vietnam Pro` kiểu Google Drive) và hàm tự động co giãn cỡ chữ (`AppTheme.getResponsiveFontSize(context, baseFontSize)`)
+4. **Không lưu nội dung vở/ghi chú xuống ổ cứng của máy:** Khi đang viết chỉ lưu tạm trên **RAM (`_ramCache`)**, sau đó đồng bộ thẳng từ **RAM lên Google Drive** (ở 3 thời điểm hoặc khi bấm nút Lưu). Bộ nhớ máy (`SharedPreferences`) chỉ dùng duy nhất để nhớ phiên đăng nhập Gmail.
 
 ---
 
@@ -91,7 +92,7 @@ Thay vì dùng trình biên dịch LaTeX (`.tex`) nặng nề và gây trễ khi
 Để đảm bảo màn hình viết bút cảm ứng đạt tốc độ 60–120fps mượt mà, tiết kiệm pin và không vượt hạn mức ghi đè của Google Drive API (`Rate Limit`), ứng dụng **không gửi Real-time từng nét bút** mà áp dụng quy trình **Lưu tức thì vào RAM + Đẩy lên Google Drive ở 3 thời điểm**:
 
 1. **Khi người dùng đang viết / thao tác (Lưu tức thì vào RAM & Reset bộ đếm 30 giây):**
-   * Mỗi khi người dùng viết chữ hoặc chỉnh sửa nội dung, dữ liệu được cập nhật tức thì (0ms) vào **RAM (`LocalStorageDatasource`)** và bộ đệm nội bộ trên máy, đồng thời bật cờ `isDirty = true`.
+   * Mỗi khi người dùng viết chữ hoặc chỉnh sửa nội dung, dữ liệu chỉ được cập nhật tức thì (0ms) vào **RAM (`LocalStorageDatasource._ramCache`)** (không ghi xuống ổ cứng của máy), đồng thời bật cờ `isDirty = true`.
    * Khởi động bộ đếm chờ **`Debounce Timer` (30 giây)**.
    * **Nếu bộ đếm 30 giây đang chạy mà người dùng tiếp tục viết/thao tác tiếp:** Hệ thống lập tức **hủy bộ đếm 30 giây cũ**, lưu tiếp dữ liệu mới vào RAM và **đếm lại 30 giây từ đầu** kể từ lúc người dùng dừng bút hẳn.
 2. **Chỉ gọi Google Drive API để ghi đè file JSON ở đúng 3 thời điểm:**
@@ -100,7 +101,7 @@ Thay vì dùng trình biên dịch LaTeX (`.tex`) nặng nề và gây trễ khi
    * **Thời điểm 3 (Khi tắt màn hình / ẩn App):** Ngay khi người dùng bấm nút nguồn tắt màn hình hoặc vuốt thoát/ẩn ứng dụng xuống nền (`AppLifecycleState.paused`).
 3. **Xử lý Mất mạng giữa chừng (Khóa thao tác tức thì):**
    * Ứng dụng lắng nghe trạng thái mạng liên tục qua `connectivity_plus`.
-   * Nếu đang thao tác mà mất mạng đột ngột: Toàn bộ chữ vừa viết đã nằm an toàn trong RAM/bộ đệm máy, ứng dụng **lập tức hiển thị thông báo khóa màn hình thao tác** cho đến khi có mạng trở lại để tự động đẩy bù gói JSON lên Google Drive.
+   * Nếu đang thao tác mà mất mạng đột ngột: Toàn bộ chữ vừa viết đã nằm an toàn trong RAM, ứng dụng **lập tức hiển thị thông báo khóa màn hình thao tác** cho đến khi có mạng trở lại để tự động đẩy bù gói JSON từ RAM lên Google Drive.
 
 ---
 
@@ -125,14 +126,14 @@ lib/
 │   └── utils/
 │       └── coordinate_converter.dart        # Hàm chuyển đổi tọa độ Y của bút -> chỉ số dòng (rowIndex)
 │
-├── data/                                    # Tầng dữ liệu (Local JSON / SQLite / Cloud)
+├── data/                                    # Tầng dữ liệu (RAM tạm thời & Đồng bộ Google Drive)
 │   ├── models/
 │   │   ├── notebook_model.dart              # Thông tin cuốn vở (id, tên, loại mẫu giấy, ngày tạo)
 │   │   ├── page_model.dart                  # Thông tin trang giấy (số trang, danh sách dòng)
 │   │   ├── line_model.dart                  # Dữ liệu từng dòng (rowIndex, text đã nhận diện)
 │   │   └── stroke_point_model.dart          # Tọa độ nét bút tạm (x, y, pressure, timestamp)
 │   ├── datasources/
-│   │   ├── local_storage_datasource.dart    # Đọc/ghi file JSON hoặc Database trên bộ nhớ máy
+│   │   ├── local_storage_datasource.dart    # Lưu tạm dữ liệu JSON tức thì trên RAM (_ramCache, 0ms, không ghi ổ cứng máy)
 │   │   └── google_drive_datasource.dart     # Đồng bộ sao lưu lên Google Drive cá nhân
 │   └── repositories/
 │       └── data_sync_repository.dart        # Trung gian đồng bộ RAM & Google Drive (Bộ đếm 30s & 3 thời điểm)
@@ -199,10 +200,10 @@ Chứa các giá trị bất biến và hàm tính toán thuần túy được s
   * **`line_model.dart`**: Lưu nội dung văn bản của một dòng kẻ (`rowIndex`, chuỗi `text` đã được AI nhận diện, kiểu căn lề hoặc màu chữ).
   * **`stroke_point_model.dart`**: Lưu tọa độ điểm của nét bút tạm thời (`x`, `y`, lực nhấn `pressure`, thời gian `timestamp`) phục vụ cho việc dựng nét mực mượt và gửi sang bộ nhận diện ML Kit.
 * **`datasources/`**:
-  * **`local_storage_datasource.dart`**: Trực tiếp đọc/ghi dữ liệu cuốn vở xuống bộ nhớ thiết bị dưới dạng file `.json` (hoặc SQLite/Isar) để đảm bảo tốc độ mở vở tức thì khi không có mạng.
-  * **`google_drive_datasource.dart`**: Giao tiếp với Google Drive REST API (vào vùng ẩn `appDataFolder`) để sao lưu và khôi phục các file JSON của người dùng.
+  * **`local_storage_datasource.dart`**: Chỉ lưu tạm nội dung vở đang viết trực tiếp trên bộ nhớ RAM (`_ramCache`, tốc độ `0ms`), tuyệt đối không ghi nội dung vở xuống ổ cứng của máy.
+  * **`google_drive_datasource.dart`**: Giao tiếp với Google Drive REST API để lưu trữ và đồng bộ các file JSON trên Google Drive cá nhân của người dùng.
 * **`repositories/`**:
-  * **`notebook_repository.dart`**: Lớp trung gian gom nhóm `local_storage_datasource` và `google_drive_datasource`. Các Controller ở tầng giao diện chỉ cần gọi hàm của Repository (ví dụ: `savePage()`, `getAllNotebooks()`) mà không cần quan tâm dữ liệu được lưu cụ thể như thế nào.
+  * **`data_sync_repository.dart`**: Lớp trung gian quản lý lưu tức thì trên RAM (`local_storage_datasource`) và đồng bộ lên Google Drive (`google_drive_datasource`) ở 3 thời điểm vàng hoặc khi bấm nút Lưu.
 
 #### D. Tầng `services/` (Các Dịch vụ Xử lý Chuyên biệt)
 Chứa các mô-đun xử lý kỹ thuật độc lập, không phụ thuộc vào trạng thái của Widget:

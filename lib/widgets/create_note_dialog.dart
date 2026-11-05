@@ -279,10 +279,8 @@ Future<void> showCreateNoteDialog({
                           Expanded(
                             child: _buildTemplateChoiceButton(
                               title: Note5x.displayName,
-                              subtitle: 'Khoảng cách dòng chuẩn 5 ô ly',
                               isSelected: selectedTemplate == Note5x.templateId,
-                              titleSize: inputFontSize * 0.95,
-                              subSize: subFontSize * 0.92,
+                              titleSize: inputFontSize,
                               onTap: isCreating
                                   ? null
                                   : () {
@@ -296,10 +294,8 @@ Future<void> showCreateNoteDialog({
                           Expanded(
                             child: _buildTemplateChoiceButton(
                               title: Note4x.displayName,
-                              subtitle: 'Khoảng cách dòng chuẩn 4 ô ly',
                               isSelected: selectedTemplate == Note4x.templateId,
-                              titleSize: inputFontSize * 0.95,
-                              subSize: subFontSize * 0.92,
+                              titleSize: inputFontSize,
                               onTap: isCreating
                                   ? null
                                   : () {
@@ -383,20 +379,19 @@ Future<void> showCreateNoteDialog({
   );
 }
 
-/// Nút chọn mẫu định dạng vở (note5x hoặc note4x) dùng màu theo Theme
+/// Nút chọn mẫu định dạng vở (Vở 5 ô ly hoặc Vở 4 ô ly) dùng màu theo Theme
 Widget _buildTemplateChoiceButton({
   required String title,
-  required String subtitle,
   required bool isSelected,
   required double titleSize,
-  required double subSize,
   VoidCallback? onTap,
 }) {
   return InkWell(
     borderRadius: BorderRadius.circular(16),
     onTap: onTap,
     child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      alignment: Alignment.center,
       decoration: BoxDecoration(
         color: isSelected ? AppColors.primaryBlue : AppColors.creamBackground,
         borderRadius: BorderRadius.circular(16),
@@ -405,29 +400,14 @@ Widget _buildTemplateChoiceButton({
           width: isSelected ? 2 : 1,
         ),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: TextStyle(
-              color: isSelected ? AppColors.basicWhite : AppColors.primaryBlue,
-              fontSize: titleSize,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            subtitle,
-            style: TextStyle(
-              color: isSelected
-                  ? AppColors.creamBackground
-                  : AppColors.basicBlack.withValues(alpha: 0.7),
-              fontSize: subSize,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
+      child: Text(
+        title,
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          color: isSelected ? AppColors.basicWhite : AppColors.primaryBlue,
+          fontSize: titleSize,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     ),
   );
