@@ -11,6 +11,7 @@ class ObservationBookScreen extends StatelessWidget {
     final driveDatasource = GoogleDriveDatasource.instance;
 
     return DriveFolderSectionWidget(
+      tabIndex: 1,
       foldersListenable: driveDatasource.observationFoldersNotifier,
       onRefresh: () => driveDatasource.refreshAllTabFolders(),
       emptyMessage:

@@ -117,10 +117,11 @@ lib/
 │
 ├── core/                                    # Cấu hình & hằng số dùng chung toàn app
 │   ├── constants/
-│   │   ├── paper_dimensions.dart            # Kích thước chuẩn A4 (800x1131), chiều cao dòng (lineHeight = 40)
-│   │   └── app_colors.dart                  # Màu đường kẻ ô ly xanh, lề đỏ, màu nền giấy chống mỏi mắt
+│   │   ├── app_colors.dart                  # Bảng màu chuẩn theo Theme (#263BAA, #FFF4D6, #FFFFFF, #000000)
+│   │   ├── note5x.dart                      # Định dạng vở 5 ô ly (chỉ vẽ đường ngang, tự co giãn theo 5 ô ly)
+│   │   └── note4x.dart                      # Định dạng vở 4 ô ly (chỉ vẽ đường ngang, tự co giãn theo 4 ô ly)
 │   ├── theme/
-│   │   └── app_theme.dart                   # Cấu hình font chữ (font viết tay), theme sáng/tối
+│   │   └── app_theme.dart                   # Cấu hình font chữ Be Vietnam Pro, hàm tự động co giãn cỡ chữ
 │   └── utils/
 │       └── coordinate_converter.dart        # Hàm chuyển đổi tọa độ Y của bút -> chỉ số dòng (rowIndex)
 │

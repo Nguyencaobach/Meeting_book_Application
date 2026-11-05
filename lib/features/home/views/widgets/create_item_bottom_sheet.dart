@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../data/datasources/google_drive_datasource.dart';
 
 // ===========================================================================
 // HÀM HIỂN THỊ BOTTOM SHEET TẠO MỚI TỪ DƯỚI LÊN (HỖ TRỢ VUỐT TẮT & NÚT X)
 // Công dụng:
 // - Khi ở tab Ghi chú (currentTabIndex == 0):
-//     1. "Tạo ghi chú mới"
-//     2. "Thêm thư mục mới"
+//     + Nếu đang ở ngoài màn hình chính:
+//         1. "Tạo ghi chú mới"
+//         2. "Thêm thư mục mới"
+//     + Nếu đang ở bên trong 1 thư mục đã chọn:
+//         1. "Tạo ghi chú mới (trong <Tên thư mục>)"
 // - Khi ở tab Sổ dự giờ (currentTabIndex == 1):
 //     1. "Tạo sổ dự giờ mới"
 //     2. "Thêm thư mục mới"
@@ -20,7 +24,15 @@ void showCreateItemBottomSheet({
   VoidCallback? onCreateFolder,
 }) {
   final bool isNoteTab = currentTabIndex == 0;
-  final String primaryActionTitle = isNoteTab ? 'Tạo ghi chú mới' : 'Tạo sổ dự giờ mới';
+  final DriveFolderItem? activeNotesFolder = isNoteTab
+      ? GoogleDriveDatasource.instance.activeNotesFolderNotifier.value
+      : null;
+
+  final String primaryActionTitle = isNoteTab
+      ? (activeNotesFolder != null
+          ? 'Tạo ghi chú mới trong "${activeNotesFolder.displayName}"'
+          : 'Tạo ghi chú mới')
+      : 'Tạo sổ dự giờ mới';
   final IconData primaryActionIcon =
       isNoteTab ? Icons.note_add_outlined : Icons.menu_book_outlined;
 
@@ -40,14 +52,18 @@ void showCreateItemBottomSheet({
     ),
     builder: (sheetContext) {
       // Gọi hàm tự động co giãn cỡ chữ theo kích thước màn hình
-      final double titleFontSize = AppTheme.getResponsiveFontSize(sheetContext, 16);
-      final double actionFontSize = AppTheme.getResponsiveFontSize(sheetContext, 16);
+      final double titleFontSize =
+          AppTheme.getResponsiveFontSize(sheetContext, 16);
+      final double actionFontSize =
+          AppTheme.getResponsiveFontSize(sheetContext, 16);
 
       return LayoutBuilder(
         builder: (context, constraints) {
           // Tự động co giãn khoảng cách lề theo độ rộng của màn hình
-          final double horizontalPadding = (constraints.maxWidth * 0.05).clamp(16.0, 36.0);
-          final double verticalPadding = (constraints.maxWidth * 0.03).clamp(12.0, 24.0);
+          final double horizontalPadding =
+              (constraints.maxWidth * 0.05).clamp(16.0, 36.0);
+          final double verticalPadding =
+              (constraints.maxWidth * 0.03).clamp(12.0, 24.0);
 
           return SafeArea(
             child: Padding(
@@ -113,19 +129,20 @@ void showCreateItemBottomSheet({
                     },
                   ),
 
-                  const SizedBox(height: 12),
-
-                  // 2. Nút chức năng "Thêm thư mục mới" (Áp dụng cho cả 2 Tab)
-                  _buildBottomSheetOption(
-                    title: 'Thêm thư mục mới',
-                    icon: Icons.create_new_folder_outlined,
-                    fontSize: actionFontSize,
-                    horizontalPadding: horizontalPadding,
-                    onTap: () {
-                      Navigator.of(sheetContext).pop();
-                      onCreateFolder?.call();
-                    },
-                  ),
+                  // 2. Nút chức năng "Thêm thư mục mới" (Chỉ hiện khi đang ở ngoài màn hình gốc)
+                  if (activeNotesFolder == null) ...[
+                    const SizedBox(height: 12),
+                    _buildBottomSheetOption(
+                      title: 'Thêm thư mục mới',
+                      icon: Icons.create_new_folder_outlined,
+                      fontSize: actionFontSize,
+                      horizontalPadding: horizontalPadding,
+                      onTap: () {
+                        Navigator.of(sheetContext).pop();
+                        onCreateFolder?.call();
+                      },
+                    ),
+                  ],
                 ],
               ),
             ),

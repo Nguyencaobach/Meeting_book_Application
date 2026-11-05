@@ -4,31 +4,39 @@ import '../core/constants/app_colors.dart';
 import '../core/theme/app_theme.dart';
 import '../data/datasources/google_drive_datasource.dart';
 import 'center_notification_dialog.dart';
+import 'item_actions_bottom_sheet.dart';
 
 // ===========================================================================
-// WIDGET HIỂN THỊ DANH SÁCH / LƯỚI THƯ MỤC KIỂU GOOGLE DRIVE DÙNG CHUNG CHO 2 TAB
+// WIDGET HIỂN THỊ DANH SÁCH / LƯỚI THƯ MỤC & FILE KIỂU GOOGLE DRIVE DÙNG CHUNG
 // Công dụng:
-// - Góc trên bên phải (dưới Header): Nút "Làm mới" (Reload từ Google Drive) nằm
-//   cùng dòng với nút chuyển chế độ xem Danh sách <-> Lưới (Ô).
-// - Bên dưới: Khu vực cuộn lên xuống (có Scrollbar) chứa các thư mục.
-// - Khi ở chế độ Lưới (Ô):
-//   + Tên thư mục nằm căn trái.
-//   + Số lượng ô trên 1 hàng tự động co giãn theo kích thước màn hình:
-//     * Màn hình lớn (>= 900px): 6 ô / hàng
-//     * Màn hình vừa (550px - 899px): 4 ô / hàng
-//     * Màn hình nhỏ (< 550px): 2 ô / hàng
+// - Góc trên:
+//   + Bên trái (khi đang mở bên trong 1 thư mục con): Hiện nút "Quay lại" kèm
+//     tên thư mục đang chọn để người dùng biết đang thao tác trong thư mục nào.
+//   + Bên phải: Nút "Làm mới" nằm cùng dòng với nút chuyển chế độ xem Danh sách <-> Lưới.
+// - Bên dưới: Khu vực cuộn lên xuống (có Scrollbar) chứa cả Thư mục và Tệp ghi chú (.json).
+// - Bên trái tên của mỗi Tệp/Thư mục có nút icon thông tin chữ "i":
+//   + Khi bấm vào nút "i" -> Sổ lên Bottom Sheet (Đổi tên, Xóa, Di chuyển).
+//   + Khi bấm vào vùng tên/ô -> Mở Thư mục hoặc mở Tệp ghi chú để render JSON.
 // ===========================================================================
 class DriveFolderSectionWidget extends StatefulWidget {
+  final int tabIndex;
   final ValueListenable<List<DriveFolderItem>> foldersListenable;
+  final ValueListenable<DriveFolderItem?>? activeFolderListenable;
+  final ValueListenable<String>? searchKeywordListenable;
   final Future<void> Function() onRefresh;
+  final VoidCallback? onExitFolder;
   final String emptyMessage;
   final ValueChanged<DriveFolderItem>? onFolderTap;
 
   const DriveFolderSectionWidget({
     super.key,
+    this.tabIndex = 0,
     required this.foldersListenable,
     required this.onRefresh,
     required this.emptyMessage,
+    this.activeFolderListenable,
+    this.searchKeywordListenable,
+    this.onExitFolder,
     this.onFolderTap,
   });
 
@@ -74,10 +82,10 @@ class _DriveFolderSectionWidgetState extends State<DriveFolderSectionWidget> {
     }
   }
 
-  /// Tính số lượng ô thư mục trên 1 hàng tùy theo chiều rộng màn hình:
-  /// - Màn hình to: max 6 ô
-  /// - Màn hình vừa: 4 ô
-  /// - Màn hình nhỏ: 2 ô
+  /// Tính số lượng ô trên 1 hàng tùy theo chiều rộng màn hình:
+  /// - Màn hình to (>= 900px): 6 ô
+  /// - Màn hình vừa (550px - 899px): 4 ô
+  /// - Màn hình nhỏ (< 550px): 2 ô
   int _calculateGridColumns(double maxWidth) {
     if (maxWidth >= 900) {
       return 6;
@@ -106,7 +114,9 @@ class _DriveFolderSectionWidgetState extends State<DriveFolderSectionWidget> {
 
           return Column(
             children: [
-              // 1. Thanh điều khiển nằm ngay dưới Header: Nút "Làm mới" nằm cùng dòng với nút chuyển chế độ xem Lưới/Danh sách
+              // 1. Thanh điều khiển nằm ngay dưới Header:
+              // Bên trái: Nút Quay lại + tên thư mục đang mở (nếu đang ở trong thư mục)
+              // Bên phải: Nút "Làm mới" + Nút chuyển "Danh sách / Lưới ô"
               Padding(
                 padding: EdgeInsets.fromLTRB(
                   horizontalPadding,
@@ -115,9 +125,77 @@ class _DriveFolderSectionWidgetState extends State<DriveFolderSectionWidget> {
                   6,
                 ),
                 child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    // Nút "Làm mới" để tự động tải lại danh sách từ Google Drive (nếu mạng lag hoặc xóa thư mục trên Drive)
+                    // Hiển thị thanh điều hướng thư mục đang chọn (nếu có)
+                    Expanded(
+                      child: widget.activeFolderListenable != null
+                          ? ValueListenableBuilder<DriveFolderItem?>(
+                              valueListenable: widget.activeFolderListenable!,
+                              builder: (context, activeFolder, _) {
+                                if (activeFolder == null) {
+                                  return const SizedBox.shrink();
+                                }
+                                return Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    InkWell(
+                                      borderRadius: BorderRadius.circular(20),
+                                      onTap: widget.onExitFolder,
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 6,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: AppColors.primaryBlue,
+                                          borderRadius:
+                                              BorderRadius.circular(20),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const Icon(
+                                              Icons.arrow_back_rounded,
+                                              color: AppColors.basicWhite,
+                                              size: 18,
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Text(
+                                              'Quay lại',
+                                              style: TextStyle(
+                                                color: AppColors.basicWhite,
+                                                fontSize:
+                                                    headerLabelSize * 0.92,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Flexible(
+                                      child: Text(
+                                        'Thư mục: ${activeFolder.displayName}',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          color: AppColors.primaryBlue,
+                                          fontSize: headerLabelSize,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
+                            )
+                          : const SizedBox.shrink(),
+                    ),
+
+                    const SizedBox(width: 8),
+
+                    // Nút "Làm mới" để tự động tải lại danh sách từ Google Drive
                     ValueListenableBuilder<bool>(
                       valueListenable:
                           _driveDatasource.isSyncingFoldersNotifier,
@@ -224,100 +302,121 @@ class _DriveFolderSectionWidgetState extends State<DriveFolderSectionWidget> {
                 ),
               ),
 
-              // 2. Vùng chứa các thư mục bên dưới (Có thanh cuộn Scrollbar lướt lên xuống)
+              // 2. Vùng chứa các Thư mục và Tệp ghi chú bên dưới (Có thanh cuộn Scrollbar)
               Expanded(
                 child: ValueListenableBuilder<List<DriveFolderItem>>(
                   valueListenable: widget.foldersListenable,
-                  builder: (context, folders, _) {
-                    if (folders.isEmpty) {
-                      return RefreshIndicator(
-                        color: AppColors.primaryBlue,
-                        onRefresh: widget.onRefresh,
-                        child: ListView(
-                          controller: _scrollController,
-                          physics: const AlwaysScrollableScrollPhysics(
-                            parent: BouncingScrollPhysics(),
-                          ),
-                          children: [
-                            SizedBox(height: constraints.maxHeight * 0.25),
-                            Padding(
-                              padding: const EdgeInsets.all(24),
-                              child: Text(
-                                widget.emptyMessage,
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: AppColors.basicBlack
-                                      .withValues(alpha: 0.6),
-                                  fontSize: emptyTextSize,
-                                  height: 1.5,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    }
+                  builder: (context, rawItems, _) {
+                    return ValueListenableBuilder<String>(
+                      valueListenable: widget.searchKeywordListenable ??
+                          ValueNotifier<String>(''),
+                      builder: (context, keyword, _) {
+                        final String cleanKeyword = keyword.trim().toLowerCase();
+                        final List<DriveFolderItem> items = cleanKeyword.isEmpty
+                            ? rawItems
+                            : rawItems
+                                .where(
+                                  (item) => item.displayName
+                                      .toLowerCase()
+                                      .contains(cleanKeyword),
+                                )
+                                .toList();
 
-                    return RefreshIndicator(
-                      color: AppColors.primaryBlue,
-                      onRefresh: widget.onRefresh,
-                      child: Scrollbar(
-                        controller: _scrollController,
-                        thumbVisibility: true,
-                        radius: const Radius.circular(8),
-                        child: _isGridView
-                            // Chế độ xem theo từng ô (Lưới): 2, 4 hoặc 6 ô tùy kích thước màn hình, tên thư mục nằm bên trái
-                            ? GridView.builder(
-                                controller: _scrollController,
-                                physics: const AlwaysScrollableScrollPhysics(
-                                  parent: BouncingScrollPhysics(),
-                                ),
-                                padding: EdgeInsets.fromLTRB(
-                                  horizontalPadding,
-                                  8,
-                                  horizontalPadding,
-                                  96, // Chừa khoảng trống cho nút (+) góc dưới
-                                ),
-                                gridDelegate:
-                                    SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: crossAxisCount,
-                                  mainAxisSpacing: 14,
-                                  crossAxisSpacing: 14,
-                                  childAspectRatio: 2.3,
-                                ),
-                                itemCount: folders.length,
-                                itemBuilder: (context, index) {
-                                  final folder = folders[index];
-                                  return _buildGridFolderTile(
-                                    folder: folder,
-                                    fontSize: folderNameSize,
-                                  );
-                                },
-                              )
-                            // Chế độ xem theo Danh sách (List): Lướt lên xuống, tên thư mục nằm bên trái
-                            : ListView.separated(
-                                controller: _scrollController,
-                                physics: const AlwaysScrollableScrollPhysics(
-                                  parent: BouncingScrollPhysics(),
-                                ),
-                                padding: EdgeInsets.fromLTRB(
-                                  horizontalPadding,
-                                  8,
-                                  horizontalPadding,
-                                  96,
-                                ),
-                                itemCount: folders.length,
-                                separatorBuilder: (_, _) =>
-                                    const SizedBox(height: 10),
-                                itemBuilder: (context, index) {
-                                  final folder = folders[index];
-                                  return _buildListFolderTile(
-                                    folder: folder,
-                                    fontSize: folderNameSize,
-                                  );
-                                },
+                        if (items.isEmpty) {
+                          return RefreshIndicator(
+                            color: AppColors.primaryBlue,
+                            onRefresh: widget.onRefresh,
+                            child: ListView(
+                              controller: _scrollController,
+                              physics: const AlwaysScrollableScrollPhysics(
+                                parent: BouncingScrollPhysics(),
                               ),
-                      ),
+                              children: [
+                                SizedBox(height: constraints.maxHeight * 0.25),
+                                Padding(
+                                  padding: const EdgeInsets.all(24),
+                                  child: Text(
+                                    cleanKeyword.isNotEmpty
+                                        ? 'Không tìm thấy mục nào phù hợp với "$keyword".'
+                                        : widget.emptyMessage,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: AppColors.basicBlack
+                                          .withValues(alpha: 0.6),
+                                      fontSize: emptyTextSize,
+                                      height: 1.5,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+
+                        return RefreshIndicator(
+                          color: AppColors.primaryBlue,
+                          onRefresh: widget.onRefresh,
+                          child: Scrollbar(
+                            controller: _scrollController,
+                            thumbVisibility: true,
+                            radius: const Radius.circular(8),
+                            child: _isGridView
+                                // Chế độ xem theo từng ô (Lưới): 2, 4 hoặc 6 ô tùy kích thước màn hình
+                                ? GridView.builder(
+                                    controller: _scrollController,
+                                    physics:
+                                        const AlwaysScrollableScrollPhysics(
+                                      parent: BouncingScrollPhysics(),
+                                    ),
+                                    padding: EdgeInsets.fromLTRB(
+                                      horizontalPadding,
+                                      8,
+                                      horizontalPadding,
+                                      96, // Chừa khoảng trống cho nút (+) góc dưới
+                                    ),
+                                    gridDelegate:
+                                        SliverGridDelegateWithFixedCrossAxisCount(
+                                      crossAxisCount: crossAxisCount,
+                                      mainAxisSpacing: 14,
+                                      crossAxisSpacing: 14,
+                                      childAspectRatio: 2.0,
+                                    ),
+                                    itemCount: items.length,
+                                    itemBuilder: (context, index) {
+                                      final item = items[index];
+                                      return _buildGridItemTile(
+                                        item: item,
+                                        fontSize: folderNameSize,
+                                      );
+                                    },
+                                  )
+                                // Chế độ xem theo Danh sách (List)
+                                : ListView.separated(
+                                    controller: _scrollController,
+                                    physics:
+                                        const AlwaysScrollableScrollPhysics(
+                                      parent: BouncingScrollPhysics(),
+                                    ),
+                                    padding: EdgeInsets.fromLTRB(
+                                      horizontalPadding,
+                                      8,
+                                      horizontalPadding,
+                                      96,
+                                    ),
+                                    itemCount: items.length,
+                                    separatorBuilder: (_, _) =>
+                                        const SizedBox(height: 10),
+                                    itemBuilder: (context, index) {
+                                      final item = items[index];
+                                      return _buildListItemTile(
+                                        item: item,
+                                        fontSize: folderNameSize,
+                                      );
+                                    },
+                                  ),
+                          ),
+                        );
+                      },
                     );
                   },
                 ),
@@ -329,62 +428,18 @@ class _DriveFolderSectionWidgetState extends State<DriveFolderSectionWidget> {
     );
   }
 
-  /// Ô thư mục ở chế độ Lưới (Tên thư mục căn bên trái)
-  Widget _buildGridFolderTile({
-    required DriveFolderItem folder,
+  /// Ô hiển thị Thư mục hoặc Tệp ghi chú ở chế độ Lưới (Nút "i" nằm sát góc phải đối diện tên)
+  Widget _buildGridItemTile({
+    required DriveFolderItem item,
     required double fontSize,
   }) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(14),
-      onTap: () => widget.onFolderTap?.call(folder),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        alignment: Alignment.centerLeft, // Căn tên thư mục nằm bên trái
-        decoration: BoxDecoration(
-          color: AppColors.creamBackground,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: AppColors.primaryBlue.withValues(alpha: 0.25),
-          ),
-        ),
-        child: Row(
-          children: [
-            const Icon(
-              Icons.folder_rounded,
-              color: AppColors.primaryBlue,
-              size: 26,
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                folder.name,
-                textAlign: TextAlign.left, // Chữ nằm bên trái
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: AppColors.basicBlack,
-                  fontSize: fontSize,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+    final bool isFolder = item.isFolder;
 
-  /// Dòng thư mục ở chế độ Danh sách (Tên thư mục căn bên trái)
-  Widget _buildListFolderTile({
-    required DriveFolderItem folder,
-    required double fontSize,
-  }) {
     return InkWell(
       borderRadius: BorderRadius.circular(14),
-      onTap: () => widget.onFolderTap?.call(folder),
+      onTap: () => widget.onFolderTap?.call(item),
       child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        padding: const EdgeInsets.only(left: 12, right: 6, top: 8, bottom: 8),
         alignment: Alignment.centerLeft,
         decoration: BoxDecoration(
           color: AppColors.creamBackground,
@@ -395,15 +450,83 @@ class _DriveFolderSectionWidgetState extends State<DriveFolderSectionWidget> {
         ),
         child: Row(
           children: [
-            const Icon(
-              Icons.folder_rounded,
+            Icon(
+              isFolder ? Icons.folder_rounded : Icons.description_rounded,
               color: AppColors.primaryBlue,
-              size: 28,
+              size: 24,
             ),
-            const SizedBox(width: 14),
+            const SizedBox(width: 8),
             Expanded(
               child: Text(
-                folder.name,
+                item.displayName,
+                textAlign: TextAlign.left,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: AppColors.basicBlack,
+                  fontSize: fontSize,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            // Nút icon thông tin chữ "i" nằm đối diện tên tệp/thư mục
+            InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: () {
+                showItemActionsBottomSheet(
+                  context: context,
+                  tabIndex: widget.tabIndex,
+                  item: item,
+                );
+              },
+              child: const Padding(
+                padding: EdgeInsets.all(6),
+                child: Icon(
+                  Icons.info_outline_rounded,
+                  color: AppColors.primaryBlue,
+                  size: 21,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Dòng hiển thị Thư mục hoặc Tệp ghi chú ở chế độ Danh sách (Nút "i" nằm sát góc phải đối diện tên)
+  Widget _buildListItemTile({
+    required DriveFolderItem item,
+    required double fontSize,
+  }) {
+    final bool isFolder = item.isFolder;
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: () => widget.onFolderTap?.call(item),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.only(left: 16, right: 10, top: 12, bottom: 12),
+        alignment: Alignment.centerLeft,
+        decoration: BoxDecoration(
+          color: AppColors.creamBackground,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: AppColors.primaryBlue.withValues(alpha: 0.25),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              isFolder ? Icons.folder_rounded : Icons.description_rounded,
+              color: AppColors.primaryBlue,
+              size: 26,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                item.displayName,
                 textAlign: TextAlign.left,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -411,6 +534,26 @@ class _DriveFolderSectionWidgetState extends State<DriveFolderSectionWidget> {
                   color: AppColors.basicBlack,
                   fontSize: fontSize * 1.05,
                   fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            // Nút icon thông tin chữ "i" nằm đối diện tên tệp/thư mục
+            InkWell(
+              borderRadius: BorderRadius.circular(18),
+              onTap: () {
+                showItemActionsBottomSheet(
+                  context: context,
+                  tabIndex: widget.tabIndex,
+                  item: item,
+                );
+              },
+              child: const Padding(
+                padding: EdgeInsets.all(6),
+                child: Icon(
+                  Icons.info_outline_rounded,
+                  color: AppColors.primaryBlue,
+                  size: 23,
                 ),
               ),
             ),

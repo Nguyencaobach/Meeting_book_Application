@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../../data/datasources/google_drive_datasource.dart';
 import '../../../widgets/create_folder_dialog.dart';
+import '../../../widgets/create_note_dialog.dart';
 import '../../../widgets/user_profile_dialog.dart';
 import '../../auth/service/auth_service.dart';
 import '../views/widgets/create_item_bottom_sheet.dart';
@@ -11,7 +12,9 @@ import '../views/widgets/create_item_bottom_sheet.dart';
 // - Tách toàn bộ phần xử lý nghiệp vụ/logic ra khỏi giao diện HomeScreen.
 // - Quản lý danh sách tên Tab, câu chữ gợi ý tìm kiếm theo từng Tab,
 //   hiển thị thông tin tài khoản Google Drive & Đăng xuất,
-//   và xử lý sự kiện tạo Thư mục mới trực tiếp vào MeetingBook/Ghi_Chu hoặc MeetingBook/So_Du_Gio.
+//   xử lý sự kiện tạo Thư mục mới và tạo Tệp ghi chú mới (.json) theo mẫu
+//   vở 5 ô ly (note5x) hoặc vở 4 ô ly (note4x) ở ngoài màn hình chính hoặc
+//   bên trong thư mục đang chọn.
 // ===========================================================================
 class HomeService {
   final AuthService _authService = AuthService();
@@ -23,7 +26,7 @@ class HomeService {
   /// Lấy ảnh đại diện của tài khoản đang đăng nhập
   String? get userPhotoUrl => _authService.currentUserPhotoUrl;
 
-  /// Tải danh sách thư mục của cả 2 Tab từ Google Drive khi mở màn hình Home
+  /// Tải danh sách thư mục và tệp của cả 2 Tab từ Google Drive khi mở màn hình Home
   Future<void> initDriveFolders() async {
     await _driveDatasource.refreshAllTabFolders();
   }
@@ -63,9 +66,22 @@ class HomeService {
     );
   }
 
-  /// Xử lý logic khi bấm "Tạo ghi chú mới" (ở Tab Ghi chú)
+  // ===========================================================================
+  // HÀM XỬ LÝ TẠO TỆP GHI CHÚ MỚI TRONG TAB GHI CHÚ (NGOÀI MÀN HÌNH CHÍNH HOẶC TRONG THƯ MỤC)
+  // - Cho phép đặt tên tệp (tối đa 150 ký tự, chống trùng tên).
+  // - Cho phép chọn mẫu vở 5 ô ly (note5x) hoặc vở 4 ô ly (note4x).
+  // - Sau khi tạo thành công -> Mở ngay giao diện trang vở để render dữ liệu JSON.
+  // ===========================================================================
   void handleCreateNote(BuildContext context) {
-    // Logic tạo ghi chú mới sẽ được triển khai tại đây
+    showCreateNoteDialog(
+      context: context,
+      onConfirmCreateNote: (fileName, paperTemplate) async {
+        return _driveDatasource.createNoteFileInNotesTab(
+          fileName: fileName,
+          paperTemplate: paperTemplate,
+        );
+      },
+    );
   }
 
   /// Xử lý logic khi bấm "Tạo sổ dự giờ mới" (ở Tab Sổ dự giờ)
@@ -91,8 +107,10 @@ class HomeService {
     );
   }
 
-  /// Xử lý logic khi người dùng nhập từ khóa tìm kiếm
+  /// Xử lý logic khi người dùng nhập từ khóa tìm kiếm trên thanh Header
   void handleSearchChanged(String keyword, int currentTabIndex) {
-    // Logic lọc danh sách theo từ khóa tìm kiếm và tab hiện tại
+    if (currentTabIndex == 0) {
+      _driveDatasource.notesSearchKeywordNotifier.value = keyword;
+    }
   }
 }
