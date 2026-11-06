@@ -89,12 +89,19 @@ class GoogleDriveDatasource {
   static const String _keyRootFolderId = 'drive_root_folder_id';
   static const String _keyNotesFolderId = 'drive_notes_folder_id';
   static const String _keyObservationFolderId = 'drive_observation_folder_id';
+  static const String _keyExportRootFolderId = 'drive_export_root_folder_id';
+  static const String _keyExportNotesFolderId = 'drive_export_notes_folder_id';
+  static const String _keyExportObservationFolderId =
+      'drive_export_observation_folder_id';
 
   static const String _folderMimeType = 'application/vnd.google-apps.folder';
   static const String _jsonMimeType = 'application/json';
   static const String rootAppFolderName = 'MeetingBook';
   static const String notesTabFolderName = 'Ghi_Chu';
   static const String observationTabFolderName = 'So_Du_Gio';
+  static const String exportRootFolderName = 'Export File';
+  static const String exportNotesSubFolderName = 'Ghi chú';
+  static const String exportObservationSubFolderName = 'Sổ dự giờ';
 
   final GoogleSignIn _googleSignIn = GoogleSignIn(
     scopes: <String>[
@@ -108,10 +115,13 @@ class GoogleDriveDatasource {
   String? _cachedDisplayName;
   String? _cachedPhotoUrl;
 
-  // Bộ nhớ đệm ID của 3 thư mục gốc trên Google Drive để truy xuất nhanh
+  // Bộ nhớ đệm ID của các thư mục gốc & thư mục Export File trên Google Drive để truy xuất nhanh
   String? _rootMeetingBookFolderId;
   String? _notesTabFolderId;
   String? _observationTabFolderId;
+  String? _exportRootFolderId;
+  String? _exportNotesFolderId;
+  String? _exportObservationFolderId;
 
   // Ngăn xếp (Stack) điều hướng thư mục nhiều cấp (cho phép mở thư mục con nằm trong thư mục cha)
   final List<DriveFolderItem> _notesFolderStack = <DriveFolderItem>[];
@@ -315,40 +325,92 @@ class GoogleDriveDatasource {
   // 4. HÀM TỰ ĐỘNG TẠO CẤU TRÚC THƯ MỤC GỐC TRÊN GOOGLE DRIVE:
   // MeetingBook/
   // ├── Ghi_Chu/
-  // └── So_Du_Gio/
+  // ├── So_Du_Gio/
+  // └── Export File/
+  //     ├── Ghi chú/
+  //     └── Sổ dự giờ/
   // ===========================================================================
-  Future<void> ensureAppFolderStructure() async {
+  Future<void> ensureAppFolderStructure({bool forceVerifyOnDrive = false}) async {
     final prefs = await SharedPreferences.getInstance();
+    final String? savedEmail = prefs.getString(_keyUserEmail);
+    final String? activeEmail = _currentUser?.email ?? _cachedEmail;
+
+    // Nếu đổi sang tài khoản Gmail khác hoặc yêu cầu xác thực lại trên Drive -> Xóa ID đệm cũ để đọc đúng Drive của tài khoản mới
+    if (forceVerifyOnDrive ||
+        (savedEmail != null &&
+            activeEmail != null &&
+            savedEmail.trim().toLowerCase() !=
+                activeEmail.trim().toLowerCase())) {
+      _rootMeetingBookFolderId = null;
+      _notesTabFolderId = null;
+      _observationTabFolderId = null;
+      _exportRootFolderId = null;
+      _exportNotesFolderId = null;
+      _exportObservationFolderId = null;
+      await prefs.remove(_keyRootFolderId);
+      await prefs.remove(_keyNotesFolderId);
+      await prefs.remove(_keyObservationFolderId);
+      await prefs.remove(_keyExportRootFolderId);
+      await prefs.remove(_keyExportNotesFolderId);
+      await prefs.remove(_keyExportObservationFolderId);
+    }
+
     _rootMeetingBookFolderId ??= prefs.getString(_keyRootFolderId);
     _notesTabFolderId ??= prefs.getString(_keyNotesFolderId);
     _observationTabFolderId ??= prefs.getString(_keyObservationFolderId);
+    _exportRootFolderId ??= prefs.getString(_keyExportRootFolderId);
+    _exportNotesFolderId ??= prefs.getString(_keyExportNotesFolderId);
+    _exportObservationFolderId ??=
+        prefs.getString(_keyExportObservationFolderId);
 
-    // Nếu cả 3 ID thư mục gốc đã có sẵn trong bộ nhớ đệm -> Tốn 0 lượt gọi API!
+    // Nếu toàn bộ ID thư mục gốc & thư mục Export File đã có sẵn trong bộ nhớ đệm -> Tốn 0 lượt gọi API!
     if (_rootMeetingBookFolderId != null &&
         _notesTabFolderId != null &&
-        _observationTabFolderId != null) {
+        _observationTabFolderId != null &&
+        _exportRootFolderId != null &&
+        _exportNotesFolderId != null &&
+        _exportObservationFolderId != null) {
       return;
     }
 
     await _executeDriveCall((api) async {
-      // Bước 1: Tìm hoặc tạo thư mục gốc "MeetingBook"
-      _rootMeetingBookFolderId ??= await _findOrCreateFolder(
+      // Bước 1: Tìm hoặc tạo thư mục gốc "MeetingBook" (Nếu có sẵn trên Drive của tài khoản thì lấy ID dùng tiếp, chưa có mới tạo mới)
+      _rootMeetingBookFolderId = await _findOrCreateFolder(
         api: api,
         folderName: rootAppFolderName,
         parentId: null,
       );
 
       // Bước 2: Tìm hoặc tạo 2 thư mục con "Ghi_Chu" và "So_Du_Gio" bên trong "MeetingBook"
-      _notesTabFolderId ??= await _findOrCreateFolder(
+      _notesTabFolderId = await _findOrCreateFolder(
         api: api,
         folderName: notesTabFolderName,
         parentId: _rootMeetingBookFolderId,
       );
 
-      _observationTabFolderId ??= await _findOrCreateFolder(
+      _observationTabFolderId = await _findOrCreateFolder(
         api: api,
         folderName: observationTabFolderName,
         parentId: _rootMeetingBookFolderId,
+      );
+
+      // Bước 3: Tìm hoặc tạo thư mục "Export File" và 2 thư mục con "Ghi chú", "Sổ dự giờ" bên trong
+      _exportRootFolderId = await _findOrCreateFolder(
+        api: api,
+        folderName: exportRootFolderName,
+        parentId: _rootMeetingBookFolderId,
+      );
+
+      _exportNotesFolderId = await _findOrCreateFolder(
+        api: api,
+        folderName: exportNotesSubFolderName,
+        parentId: _exportRootFolderId,
+      );
+
+      _exportObservationFolderId = await _findOrCreateFolder(
+        api: api,
+        folderName: exportObservationSubFolderName,
+        parentId: _exportRootFolderId,
       );
     });
 
@@ -356,6 +418,12 @@ class GoogleDriveDatasource {
     await prefs.setString(_keyRootFolderId, _rootMeetingBookFolderId!);
     await prefs.setString(_keyNotesFolderId, _notesTabFolderId!);
     await prefs.setString(_keyObservationFolderId, _observationTabFolderId!);
+    await prefs.setString(_keyExportRootFolderId, _exportRootFolderId!);
+    await prefs.setString(_keyExportNotesFolderId, _exportNotesFolderId!);
+    await prefs.setString(
+      _keyExportObservationFolderId,
+      _exportObservationFolderId!,
+    );
   }
 
   /// Hàm tìm một thư mục trên Google Drive theo tên và thư mục cha; nếu chưa có thì tạo mới
@@ -1359,6 +1427,89 @@ class GoogleDriveDatasource {
   }
 
   // ===========================================================================
+  // 11B. HÀM ĐẨY FILE PDF HOẶC WORD VỪA XUẤT TRÊN RAM LÊN THƯ MỤC EXPORT FILE
+  // Công dụng:
+  // - Không lưu file xuống ổ cứng thiết bị, nhận trực tiếp `fileBytes` từ RAM.
+  // - Tự động lưu vào đúng thư mục:
+  //   + Tab 0 (Ghi chú)   -> MeetingBook/Export File/Ghi chú/<Tên file>.<đuôi>
+  //   + Tab 1 (Sổ dự giờ) -> MeetingBook/Export File/Sổ dự giờ/<Tên file>.<đuôi>
+  // - Nếu đã có file trùng tên trong thư mục đích thì tự động ghi đè bản mới nhất.
+  // ===========================================================================
+  Future<({String fileId, String fullFileName, String folderPathLabel})>
+      uploadExportedFileToDrive({
+    required int tabIndex,
+    required String baseFileName,
+    required String extension,
+    required String mimeType,
+    required Uint8List fileBytes,
+  }) async {
+    await ensureAppFolderStructure();
+
+    final String cleanBase = baseFileName.trim().endsWith('.json')
+        ? baseFileName.trim().substring(0, baseFileName.trim().length - 5)
+        : baseFileName.trim();
+    final String cleanExt =
+        extension.startsWith('.') ? extension.substring(1) : extension;
+    final String fullFileName = '$cleanBase.$cleanExt';
+
+    final String targetExportFolderId =
+        tabIndex == 0 ? _exportNotesFolderId! : _exportObservationFolderId!;
+    final String subFolderLabel = tabIndex == 0
+        ? exportNotesSubFolderName
+        : exportObservationSubFolderName;
+    final String folderPathLabel =
+        '$rootAppFolderName / $exportRootFolderName / $subFolderLabel';
+
+    final String uploadedId = await _executeDriveCall((api) async {
+      final String escapedFileName = fullFileName.replaceAll("'", "\\'");
+      final drive.FileList existingFiles = await api.files.list(
+        q: "'$targetExportFolderId' in parents and name = '$escapedFileName' and trashed = false",
+        spaces: 'drive',
+        $fields: 'files(id, name)',
+        pageSize: 1,
+      );
+
+      final Stream<List<int>> byteStream =
+          Stream<List<int>>.value(fileBytes);
+      final drive.Media media = drive.Media(byteStream, fileBytes.length);
+
+      if (existingFiles.files != null && existingFiles.files!.isNotEmpty) {
+        final String existingId = existingFiles.files!.first.id!;
+        final drive.File updateMeta = drive.File()
+          ..name = fullFileName
+          ..mimeType = mimeType
+          ..modifiedTime = DateTime.now().toUtc();
+
+        final drive.File updated = await api.files.update(
+          updateMeta,
+          existingId,
+          uploadMedia: media,
+          $fields: 'id',
+        );
+        return updated.id ?? existingId;
+      }
+
+      final drive.File createMeta = drive.File()
+        ..name = fullFileName
+        ..mimeType = mimeType
+        ..parents = <String>[targetExportFolderId];
+
+      final drive.File created = await api.files.create(
+        createMeta,
+        uploadMedia: media,
+        $fields: 'id',
+      );
+      return created.id!;
+    });
+
+    return (
+      fileId: uploadedId,
+      fullFileName: fullFileName,
+      folderPathLabel: folderPathLabel,
+    );
+  }
+
+  // ===========================================================================
   // 12. HÀM LƯU THÔNG TIN DUY TRÌ ĐĂNG NHẬP & ĐĂNG XUẤT
   // ===========================================================================
   Future<void> _saveUserToPrefs(GoogleSignInAccount account) async {
@@ -1388,6 +1539,9 @@ class GoogleDriveDatasource {
     _rootMeetingBookFolderId = null;
     _notesTabFolderId = null;
     _observationTabFolderId = null;
+    _exportRootFolderId = null;
+    _exportNotesFolderId = null;
+    _exportObservationFolderId = null;
     _notesFolderStack.clear();
     _observationFolderStack.clear();
     activeNotesFolderNotifier.value = null;

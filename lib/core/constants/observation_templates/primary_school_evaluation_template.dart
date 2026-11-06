@@ -3,6 +3,21 @@ import '../../theme/app_theme.dart';
 import '../app_colors.dart';
 
 // ===========================================================================
+// MODEL THÔNG TIN MỘT BIỂU MẪU SỔ DỰ GIỜ ĐỂ HIỂN THỊ TRONG DANH SÁCH CHỌN
+// ===========================================================================
+class ObservationTemplateItem {
+  final String id;
+  final String name;
+  final String description;
+
+  const ObservationTemplateItem({
+    required this.id,
+    required this.name,
+    required this.description,
+  });
+}
+
+// ===========================================================================
 // MODEL THÔNG TIN MỘT TIÊU CHÍ CHẤM ĐIỂM TRONG PHIẾU ĐÁNH GIÁ TIẾT DẠY TIỂU HỌC
 // Công dụng:
 // - Lưu trữ mã tiêu chí (1.1 -> 3.4), tên nhóm tiêu chuẩn, nội dung chi tiết,
@@ -74,6 +89,66 @@ class PrimarySchoolEvaluationTemplate {
 
   /// Chiều ngang tối thiểu chuẩn của trang biểu mẫu (để bảng 3 cột và 5 cột luôn rộng rãi)
   static const double minPaperWidth = 680.0;
+
+  /// Số đơn vị chia dòng mặc định của biểu mẫu
+  static const int unitsPerRow = 4;
+
+  /// Danh sách tất cả các biểu mẫu Sổ dự giờ hiện có (dùng để hiển thị dạng danh sách khi tạo file)
+  static const List<ObservationTemplateItem> availableTemplates =
+      <ObservationTemplateItem>[
+    ObservationTemplateItem(
+      id: templateId,
+      name: displayName,
+      description: description,
+    ),
+  ];
+
+  /// Kiểm tra xem mã biểu mẫu có thuộc nhóm biểu mẫu Sổ dự giờ hay không
+  static bool isObservationTemplate(String? id) {
+    if (id == null) return false;
+    return id == templateId || id == 'observation_blank_v1';
+  }
+
+  /// Màu nền trang biểu mẫu theo Theme (#FFFFFF - Màu trắng giống bản gốc biểu mẫu)
+  static Color getPaperBackgroundColor() {
+    return AppColors.basicWhite;
+  }
+
+  /// Màu chữ viết trên biểu mẫu theo Theme (#000000)
+  static Color getTextColor() {
+    return AppColors.basicBlack;
+  }
+
+  /// Tính chiều cao 1 đơn vị nhỏ tự động co giãn theo kích thước màn hình
+  static double getResponsiveUnitHeight(
+    BuildContext context, {
+    double? maxWidth,
+  }) {
+    final Size screenSize = MediaQuery.sizeOf(context);
+    final double referenceWidth = maxWidth ?? screenSize.width;
+    final double shortestSide = screenSize.shortestSide;
+
+    final double baseUnit =
+        (referenceWidth * 0.0085 + shortestSide * 0.0065).clamp(9.0, 13.0);
+    return baseUnit.roundToDouble();
+  }
+
+  /// Tính chiều cao 1 dòng viết trên biểu mẫu tự động co giãn theo màn hình
+  static double getResponsiveRowHeight(
+    BuildContext context, {
+    double? maxWidth,
+  }) {
+    final double unitHeight = getResponsiveUnitHeight(
+      context,
+      maxWidth: maxWidth,
+    );
+    return unitHeight * unitsPerRow;
+  }
+
+  /// Tính khoảng lề ngang hai bên trang biểu mẫu
+  static double getResponsiveHorizontalPadding(double maxWidth) {
+    return (maxWidth * 0.022).clamp(14.0, 22.0);
+  }
 
   // ===========================================================================
   // QUY ƯỚC CHỈ SỐ DÒNG (ROW INDEX) LƯU TRONG MẢNG `lines` CỦA FILE JSON
@@ -714,10 +789,7 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
                   Text(
                     'TRƯỜNG TH NGUYỄN BÁ NGỌC',
                     textAlign: TextAlign.center,
-                    style: labelStyle.copyWith(
-                      fontSize: smallFontSize,
-                      fontWeight: FontWeight.w600,
-                    ),
+                    style: boldStyle.copyWith(fontSize: smallFontSize),
                   ),
                   const SizedBox(height: 4),
                   Container(
@@ -1214,9 +1286,9 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      // Cột Nội dung (Tiêu chuẩn) - gộp rộng bằng Cột Nhóm (18) + Cột Mã (7) = 25
+                      // Cột Nội dung (Tiêu chuẩn) - rộng bằng đúng Cột Nhóm (flex: 18) như biểu mẫu gốc
                       Expanded(
-                        flex: 25,
+                        flex: 18,
                         child: Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 6,
@@ -1238,9 +1310,9 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
                           ),
                         ),
                       ),
-                      // Cột Tiêu chí (flex: 51)
+                      // Cột Tiêu chí - gộp Cột Mã (7) + Cột Nội dung Tiêu chí (51) = 58 như biểu mẫu gốc
                       Expanded(
-                        flex: 51,
+                        flex: 58,
                         child: Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 8,
@@ -1432,7 +1504,7 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
     required TextStyle inputTextStyle,
   }) {
     final String groupTitle = groupSpecs.first.groupTitle;
-    final double scoreColWidth = innerWidth * 0.12;
+    final double scoreColWidth = (innerWidth - 2.4) * 0.12;
     final double scoreFieldHeight = rowHeight * 1.05;
 
     return Container(
@@ -1565,6 +1637,7 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
                           ),
 
                           // Cột Điểm đánh giá (Ô nhập điểm tương tác) - flex: 12
+                          // Lưu ý: Không dùng LayoutBuilder bên trong IntrinsicHeight vì Flutter cấm tính Intrinsic Dimensions trên LayoutBuilder
                           Expanded(
                             flex: 12,
                             child: Container(
@@ -1732,7 +1805,7 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
                         child: Text('Đức Lập, ngày ', style: italicStyle),
                       ),
                       SizedBox(
-                        width: 42,
+                        width: 52,
                         height: fieldHeight,
                         child: CustomPaint(
                           painter: ObservationDottedUnderlinePainter(
@@ -1742,7 +1815,7 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
                           child: buildInteractiveField(
                             rowIndex:
                                 PrimarySchoolEvaluationTemplate.rowSignDay,
-                            width: 42,
+                            width: 52,
                             height: fieldHeight,
                             textStyle: inputTextStyle,
                             horizontalPadding: 2.0,
@@ -1758,7 +1831,7 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
                         child: Text(' tháng ', style: italicStyle),
                       ),
                       SizedBox(
-                        width: 42,
+                        width: 52,
                         height: fieldHeight,
                         child: CustomPaint(
                           painter: ObservationDottedUnderlinePainter(
@@ -1768,7 +1841,7 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
                           child: buildInteractiveField(
                             rowIndex:
                                 PrimarySchoolEvaluationTemplate.rowSignMonth,
-                            width: 42,
+                            width: 52,
                             height: fieldHeight,
                             textStyle: inputTextStyle,
                             horizontalPadding: 2.0,
@@ -1784,7 +1857,7 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
                         child: Text(' năm ', style: italicStyle),
                       ),
                       SizedBox(
-                        width: 68,
+                        width: 78,
                         height: fieldHeight,
                         child: CustomPaint(
                           painter: ObservationDottedUnderlinePainter(
@@ -1794,7 +1867,7 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
                           child: buildInteractiveField(
                             rowIndex:
                                 PrimarySchoolEvaluationTemplate.rowSignYear,
-                            width: 68,
+                            width: 78,
                             height: fieldHeight,
                             textStyle: inputTextStyle,
                             horizontalPadding: 2.0,
@@ -1820,10 +1893,11 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
                   textAlign: TextAlign.center,
                   style: italicStyle,
                 ),
-                const SizedBox(height: 28),
+                // Giãn khoảng trống rộng rãi để chừa chỗ ký tên trước dòng Họ tên người dự giờ
+                SizedBox(height: (rowHeight * 2.5).clamp(80.0, 110.0)),
                 // Dòng nhập họ tên người dự giờ
                 SizedBox(
-                  width: 240,
+                  width: 256,
                   height: fieldHeight,
                   child: CustomPaint(
                     painter: ObservationDottedUnderlinePainter(
@@ -1832,7 +1906,7 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
                     ),
                     child: buildInteractiveField(
                       rowIndex: PrimarySchoolEvaluationTemplate.rowObserverName,
-                      width: 240,
+                      width: 256,
                       height: fieldHeight,
                       textStyle: inputTextStyle,
                       horizontalPadding: 6.0,

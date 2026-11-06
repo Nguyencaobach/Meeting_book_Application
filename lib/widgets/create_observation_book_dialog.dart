@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../core/constants/app_colors.dart';
-import '../core/constants/observation_templates/blank_observation_template.dart';
+import '../core/constants/observation_templates/primary_school_evaluation_template.dart';
 import '../core/theme/app_theme.dart';
 import '../data/datasources/google_drive_datasource.dart';
 import '../data/models/notebook_model.dart';
@@ -30,12 +30,12 @@ Future<void> showCreateObservationBookDialog({
       GoogleDriveDatasource.instance.currentObservationPathLabel;
 
   final List<ObservationTemplateItem> templates =
-      BlankObservationTemplate.availableTemplates;
+      PrimarySchoolEvaluationTemplate.availableTemplates;
 
-  // Mặc định chọn biểu mẫu đầu tiên trong danh sách (Biểu mẫu sổ dự giờ trống)
+  // Mặc định chọn biểu mẫu đầu tiên trong danh sách
   String selectedTemplateId = templates.isNotEmpty
       ? templates.first.id
-      : BlankObservationTemplate.templateId;
+      : PrimarySchoolEvaluationTemplate.templateId;
   bool isCreating = false;
   String? duplicateOrServerError;
 

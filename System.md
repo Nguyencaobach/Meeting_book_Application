@@ -68,17 +68,15 @@ Sử dụng Widget `Listener` của Flutter để lọc sự kiện đầu vào 
   4. Nhận chuỗi `String` kết quả $\rightarrow$ Xóa nét mực tạm trên Canvas $\rightarrow$ Nối chuỗi văn bản vừa nhận diện vào đúng dòng `rowIndex` trên trang giấy (hiển thị bằng font chữ viết tay hoặc font chuẩn nằm khớp trên đường kẻ đậm).
   5. Nếu độ dài văn bản vượt quá chiều rộng dòng, tự động ngắt từ đẩy xuống `rowIndex + 1` (hoặc sang trang mới nếu đã ở dòng cuối cùng).
 
-### 3.4. Lưu trữ Dữ liệu, Đổi mẫu giấy & Xuất file PDF (Thay thế LaTeX)
-Thay vì dùng trình biên dịch LaTeX (`.tex`) nặng nề và gây trễ khi vẽ thời gian thực, sử dụng kiến trúc **JSON + `CustomPainter` + Package `pdf`**:
+### 3.4. Lưu trữ Dữ liệu, Đổi mẫu giấy & Xuất file PDF / Word (Thay thế LaTeX)
+Thay vì dùng trình biên dịch LaTeX (`.tex`) nặng nề và gây trễ khi vẽ thời gian thực, sử dụng kiến trúc **JSON + `CustomPainter` + Template Dart (`pdf` & `WordML`)**:
 * **Định dạng dữ liệu nhẹ (Lightweight JSON):** Lưu cấu trúc Thư mục $\rightarrow$ Sổ tay $\rightarrow$ Trang $\rightarrow$ Dòng dưới dạng **JSON** (chỉ nặng vài KB, không gây nặng bộ nhớ máy).
-* **Đổi kiểu mẫu giấy (Template Switching):** Chỉ cần thay đổi thuộc tính `"paperTemplate"` (`"oly_5_ly"`, `"oly_4_ly"`, `"ruled_line"`, `"cornell"`), `CustomPainter` trên màn hình và bộ xuất `pdf` sẽ tự động vẽ lại nền giấy tương ứng mà giữ nguyên toàn bộ các dòng chữ đã viết.
+* **Đổi kiểu mẫu giấy (Template Switching):** Dựa vào thuộc tính `"paperTemplate"` (`"note5x"` cho vở 5 ô ly, `"note4x"` cho vở 4 ô ly, `"primary_school_eval_v1"` cho Phiếu đánh giá tiết dạy cấp Tiểu học 3 trang), giao diện trên màn hình và bộ xuất `PDF` / `Word` tự động dựng đúng mẫu biểu tương ứng.
 * **Cấu trúc JSON mẫu của một trang vở:**
   ```json
   {
     "pageNumber": 1,
-    "paperTemplate": "oly_5_ly",
-    "fontFamily": "PatrickHand",
-    "fontSize": 22.0,
+    "paperTemplate": "note5x",
     "lines": [
       { "rowIndex": 0, "text": "Thứ Tư, ngày 4 tháng 11 năm 2026" },
       { "rowIndex": 1, "text": "Bài 1: Kiến trúc ứng dụng vở ô ly Flutter" },
@@ -86,7 +84,8 @@ Thay vì dùng trình biên dịch LaTeX (`.tex`) nặng nề và gây trễ khi
     ]
   }
   ```
-* **Xuất file PDF Vector (Khi cần chia sẻ/in ấn):** Dùng package `pdf` và `printing` của Dart để vẽ lại lưới ô ly và các dòng chữ ra file `.pdf` chuẩn A4 trong chưa đầy 0.5 giây.
+* **Xuất file PDF (`.pdf`) và Word (`.doc`) trực tiếp trên RAM lên Google Drive:**
+  * Dùng `PdfExportService` (package `pdf` + `printing` với bộ đệm font `Be Vietnam Pro` trên RAM) và `WordExportService` (chuẩn WordML Print-View A4 có UTF-8 BOM) để dựng mảng byte `Uint8List` ngay trên RAM và tải thẳng lên thư mục `MeetingBook/Export File/Ghi chú` hoặc `MeetingBook/Export File/Sổ dự giờ`.
 
 ### 3.5. Cơ chế Lưu tạm RAM & Đồng bộ JSON thông minh lên Google Drive (Bộ đếm 30s & 3 Thời điểm vàng)
 Để đảm bảo màn hình viết bút cảm ứng đạt tốc độ 60–120fps mượt mà, tiết kiệm pin và không vượt hạn mức ghi đè của Google Drive API (`Rate Limit`), ứng dụng **không gửi Real-time từng nét bút** mà áp dụng quy trình **Lưu tức thì vào RAM + Đẩy lên Google Drive ở 3 thời điểm**:
@@ -105,11 +104,11 @@ Thay vì dùng trình biên dịch LaTeX (`.tex`) nặng nề và gây trễ khi
 
 ---
 
-## 4. Cấu trúc Thư mục Dự án (`lib/`)
+## 4. Cấu trúc Thư mục Dự án (`lib/`) & Cây Thư mục Google Drive (`MeetingBook/`)
 
-Dự án được tổ chức theo kiến trúc **Feature-First kết hợp Clean Architecture rút gọn (Layered Architecture)**, giúp tách biệt rõ ràng giữa giao diện (UI/Painters), logic điều khiển (Controllers/Services), dịch vụ hệ thống/AI (Services) và tầng dữ liệu (Data).
+Dự án được tổ chức theo kiến trúc **Feature-First kết hợp Clean Architecture rút gọn (Layered Architecture)**, giúp tách biệt rõ ràng giữa giao diện (UI/Painters), logic điều khiển (Controllers/Services), dịch vụ hệ thống/AI/Xuất file (Services) và tầng dữ liệu (Data).
 
-### 4.1. Sơ đồ cây thư mục (Cập nhật đầy đủ theo thực tế dự án hiện tại)
+### 4.1. Sơ đồ cây thư mục mã nguồn dự án (`lib/` - Đầy đủ 40 tệp thực tế)
 
 ```text
 lib/
@@ -123,8 +122,7 @@ lib/
 │   │   │   ├── note5x.dart                  # Định dạng vở 5 ô ly (Note5xHorizontalPaperPainter vẽ dòng kẻ ngang co giãn)
 │   │   │   └── note4x.dart                  # Định dạng vở 4 ô ly (Note4xHorizontalPaperPainter vẽ dòng kẻ ngang co giãn)
 │   │   └── observation_templates/           # Thư mục gom các biểu mẫu cho Tab Sổ dự giờ
-│   │       ├── primary_school_evaluation_template.dart # Biểu mẫu 3 trang "Phiếu đánh giá tiết dạy giáo viên cấp Tiểu học"
-│   │       └── blank_observation_template.dart         # Biểu mẫu sổ dự giờ trống code sẵn & danh sách biểu mẫu (availableTemplates)
+│   │       └── primary_school_evaluation_template.dart # Biểu mẫu 3 trang "Phiếu đánh giá tiết dạy giáo viên cấp Tiểu học" & danh sách biểu mẫu (availableTemplates)
 │   ├── theme/
 │   │   └── app_theme.dart                   # Cấu hình font chữ Be Vietnam Pro & hàm getResponsiveFontSize()
 │   └── utils/
@@ -132,19 +130,20 @@ lib/
 │
 ├── data/                                    # Tầng dữ liệu (RAM tạm thời 0ms & Đồng bộ Google Drive cá nhân)
 │   ├── models/
-│   │   ├── notebook_model.dart              # Thông tin cuốn vở/file ghi chú (id, title, paperTemplate, pages)
+│   │   ├── notebook_model.dart              # Thông tin cuốn vở/file ghi chú (id, title, paperTemplate, updatedAt, pages)
 │   │   ├── page_model.dart                  # Thông tin trang giấy (pageNumber, paperTemplate, danh sách dòng lines)
-│   │   ├── line_model.dart                  # Dữ liệu từng dòng kẻ ngang (rowIndex, chuỗi text)
+│   │   ├── line_model.dart                  # Dữ liệu từng dòng kẻ ngang / ô biểu mẫu (rowIndex, chuỗi text)
 │   │   └── stroke_point_model.dart          # Tọa độ điểm nét bút tạm (x, y, pressure, timestamp)
 │   ├── datasources/
 │   │   ├── local_storage_datasource.dart    # Chỉ lưu tạm JSON trên bộ nhớ RAM (_ramCache, 0ms), không ghi ổ cứng máy
-│   │   └── google_drive_datasource.dart     # Kết nối Google Drive API: tạo/đổi tên/xóa/di chuyển cây thư mục, hoàn tác & đọc/ghi file .json
+│   │   └── google_drive_datasource.dart     # Kết nối Google Drive API: tạo/đổi tên/xóa/di chuyển cây thư mục, hoàn tác, đọc/ghi .json & xuất file vào Export File
 │   └── repositories/
 │       └── data_sync_repository.dart        # Trung gian đồng bộ RAM -> Google Drive (Bộ đếm 30s, 3 thời điểm vàng, nút Lưu & khóa mất mạng)
 │
-├── services/                                # Các dịch vụ xử lý độc lập với giao diện (AI nhận diện bút, Lọc bút, Xuất PDF)
+├── services/                                # Các dịch vụ xử lý độc lập với giao diện (AI nhận diện bút, Lọc bút, Xuất PDF & Word)
 │   ├── handwriting_recognition_service.dart # Gọi Google ML Kit Digital Ink (model 'vi') chuyển nét vẽ viết tay thành văn bản tiếng Việt
-│   ├── pdf_export_service.dart              # Vẽ lại dòng kẻ vở + chữ và xuất ra file .pdf chuẩn A4
+│   ├── pdf_export_service.dart              # Template Dart xuất vở ô ly & biểu mẫu 3 trang ra file .pdf chuẩn A4 trên RAM (có cache font)
+│   ├── word_export_service.dart             # Template Dart xuất vở ô ly & biểu mẫu 3 trang ra file Word (.doc) chuẩn A4 trên RAM
 │   └── stylus_input_filter.dart             # Lọc sự kiện Bút cảm ứng / Chuột / Chạm và chống tì tay (Palm Rejection)
 │
 ├── widgets/                                 # Các Widget & Hộp thoại dùng chung cho toàn bộ ứng dụng
@@ -180,7 +179,7 @@ lib/
     │   │   └── notes_controller.dart        # Quản lý trạng thái danh sách Ghi chú
     │   └── views/
     │       ├── notes_screen.dart            # Màn hình danh sách Thư mục & Tệp ghi chú (.json) trong MeetingBook/Ghi_Chu
-    │       ├── note_editor_screen.dart      # Màn hình Trang vở & Biểu mẫu (note5x/note4x/observation_blank_v1): Bàn phím Telex, Viết bút, Chỉ xem, Làm mới, Con trỏ kéo ngang & Lưu Google Drive
+    │       ├── note_editor_screen.dart      # Màn hình Trang vở & Biểu mẫu (note5x/note4x/primary_school_eval_v1): Bàn phím Telex, Viết bút, Chỉ xem, Làm mới, Xuất file PDF/Word & Lưu Google Drive
     │       └── widgets/
     │           └── pen_handwriting_pad_widget.dart # Bảng giấy viết bút 60-120fps (RepaintBoundary): vẽ nét mực mượt, tự nối chữ/cách từ & tự mờ nét sau khi chèn chữ
     │
@@ -191,7 +190,20 @@ lib/
             └── observation_book_screen.dart # Màn hình danh sách Thư mục & Tệp sổ dự giờ (.json) trong MeetingBook/So_Du_Gio (mở thư mục đa cấp & mở biểu mẫu)
 ```
 
-### 4.2. Giải thích chi tiết từng phân tầng & tệp tin
+### 4.2. Sơ đồ cây thư mục tự động khởi tạo trên Google Drive cá nhân (`MeetingBook/`)
+
+Khi người dùng đăng nhập Gmail, hàm `GoogleDriveDatasource.ensureAppFolderStructure()` tự động kiểm tra và tạo sẵn cây thư mục chuẩn trên Google Drive của người dùng:
+
+```text
+MeetingBook/                                 # Thư mục gốc của ứng dụng trên Google Drive
+├── Ghi_Chu/                                 # Lưu trữ các thư mục con & tệp dữ liệu gốc (.json) của Tab Ghi chú (Vở 5 ô ly / 4 ô ly)
+├── So_Du_Gio/                               # Lưu trữ các thư mục con & tệp dữ liệu gốc (.json) của Tab Sổ dự giờ (Phiếu đánh giá tiết dạy Tiểu học)
+└── Export File/                             # Thư mục chứa các tệp xuất bản (.pdf / .doc) khi người dùng bấm nút "Xuất file"
+    ├── Ghi chú/                             # Chứa các file PDF (.pdf) và Word (.doc) xuất ra từ Tab Ghi chú
+    └── Sổ dự giờ/                           # Chứa các file PDF (.pdf) và Word (.doc) xuất ra từ Tab Sổ dự giờ
+```
+
+### 4.3. Giải thích chi tiết từng phân tầng & tệp tin
 
 #### A. Khởi tạo ứng dụng (`Root`)
 * **`main.dart`**: Điểm bắt đầu của ứng dụng (`void main()`), khởi tạo `WidgetsFlutterBinding` và chạy `runApp(const MeetingBookApp())`.
@@ -204,24 +216,24 @@ Chứa các giá trị bất biến, thông số dòng kẻ và hàm tính toán
   * **`note5x.dart`**: Định nghĩa thông số tỷ lệ và `Note5xHorizontalPaperPainter` vẽ trang giấy kẻ ngang theo chuẩn tỷ lệ vở **5 ô ly** (`note5x`), tự động co giãn chiều cao dòng và cỡ chữ theo màn hình.
   * **`note4x.dart`**: Định nghĩa thông số tỷ lệ và `Note4xHorizontalPaperPainter` vẽ trang giấy kẻ ngang theo chuẩn tỷ lệ vở **4 ô ly** (`note4x`), tự động co giãn chiều cao dòng và cỡ chữ theo màn hình.
 * **`constants/observation_templates/` (Thư mục gom các biểu mẫu cho Sổ dự giờ)**:
-  * **`primary_school_evaluation_template.dart`**: Tái tạo 100% biểu mẫu 3 trang **"Phiếu đánh giá tiết dạy giáo viên cấp Tiểu học"** (`primary_school_eval_v1`) gồm: Quốc hiệu & thông tin người dạy, Bảng ghi chép tiến trình 3 cột (28 dòng nét đứt), Nhận xét chung (5 dòng chấm), Bảng thang điểm 12 tiêu chí (`1.1` -> `3.4`, tự động cộng tổng điểm trên `20,0`), quy định 4 mức xếp loại, tự động xét loại tiết dạy và mục ký tên Người dự giờ.
-  * **`blank_observation_template.dart`**: Định nghĩa `ObservationTemplateItem`, danh sách các biểu mẫu Sổ dự giờ (`availableTemplates`), thông số co giãn `BlankObservationTemplate` (`observation_blank_v1`) và `BlankObservationPaperPainter`.
+  * **`primary_school_evaluation_template.dart`**: Định nghĩa `ObservationTemplateItem`, danh sách biểu mẫu `availableTemplates` và tái tạo 100% biểu mẫu 3 trang nền trắng **"Phiếu đánh giá tiết dạy giáo viên cấp Tiểu học"** (`primary_school_eval_v1`) gồm: Quốc hiệu & thông tin người dạy, Bảng ghi chép tiến trình 3 cột (28 dòng nét đứt), Nhận xét chung (5 dòng chấm), Bảng thang điểm 12 tiêu chí (`1.1` -> `3.4`, tự động cộng tổng điểm trên `20,0`), quy định 4 mức xếp loại, tự động xét loại tiết dạy và mục ký tên Người dự giờ.
 * **`theme/app_theme.dart`**: Thiết lập `ThemeData` tổng thể với bộ font chữ `Be Vietnam Pro` kiểu Google Drive và hàm `AppTheme.getResponsiveFontSize(context, baseFontSize)` tự động co giãn cỡ chữ theo kích thước thiết bị.
 * **`utils/coordinate_converter.dart`**: Chứa các hàm toán học chuyển đổi tọa độ điểm chạm thực tế $(X, Y)$ trên trang giấy sang chỉ số dòng (`rowIndex`).
 
 #### C. Tầng `data/` (Quản lý Dữ liệu RAM & Đồng bộ Google Drive)
 Đảm nhận định nghĩa cấu trúc dữ liệu JSON, lưu tạm tốc độ cao trên RAM và đồng bộ đám mây Google Drive:
 * **`models/`**:
-  * **`notebook_model.dart`**: Đại diện cho một tệp ghi chú / sổ dự giờ (`id`, `title`, `paperTemplate` (`note5x`, `note4x`, `observation_blank_v1`...), `createdAt`, `updatedAt`, `pages`).
+  * **`notebook_model.dart`**: Đại diện cho một tệp ghi chú / sổ dự giờ (`id`, `title`, `paperTemplate` (`note5x`, `note4x`, `primary_school_eval_v1`), `updatedAt`, `pages`).
   * **`page_model.dart`**: Đại diện cho một trang giấy trong vở (`pageNumber`, `paperTemplate`, và danh sách `List<LineModel> lines`).
-  * **`line_model.dart`**: Lưu nội dung văn bản của từng dòng kẻ ngang (`rowIndex`, chuỗi `text`).
+  * **`line_model.dart`**: Lưu nội dung văn bản của từng dòng kẻ ngang hoặc từng ô biểu mẫu (`rowIndex`, chuỗi `text`).
   * **`stroke_point_model.dart`**: Lưu tọa độ điểm của nét bút viết tay (`x`, `y`, `pressure`, `timestamp`) phục vụ vẽ mực thời gian thực và gửi sang Google ML Kit.
 * **`datasources/`**:
   * **`local_storage_datasource.dart`**: Chỉ lưu tạm dữ liệu JSON của cuốn vở đang mở trực tiếp trên **bộ nhớ RAM (`_ramCache`, tốc độ `0ms`)**, tuyệt đối không ghi nội dung vở xuống ổ cứng của máy.
-  * **`google_drive_datasource.dart`**: Quản lý toàn bộ kết nối Google Drive API (`MeetingBook/Ghi_Chu` và `MeetingBook/So_Du_Gio`):
+  * **`google_drive_datasource.dart`**: Quản lý toàn bộ kết nối Google Drive API (`MeetingBook/Ghi_Chu`, `MeetingBook/So_Du_Gio` và `MeetingBook/Export File/{Ghi chú, Sổ dự giờ}`):
     * Tự động làm mới Access Token khi gặp lỗi `401`.
     * Điều hướng mở thư mục đa cấp ở cả 2 Tab (ngăn xếp `_notesFolderStack`, `_observationFolderStack`).
     * Tạo thư mục mới (`createFolderInTab`), tạo tệp ghi chú `.json` (`createNoteFileInNotesTab`), tạo tệp sổ dự giờ `.json` (`createObservationFileInTab`), đọc nội dung `.json` (ưu tiên RAM hoặc tải mới từ Drive khi bấm **Làm mới**).
+    * Xuất file trực tiếp từ RAM lên Google Drive (`uploadExportedFileToDrive`) vào đúng thư mục `MeetingBook/Export File/Ghi chú` hoặc `MeetingBook/Export File/Sổ dự giờ`.
     * Bộ 3 chức năng quản lý mục: **Đổi tên** (`renameItemInTab` chống trùng tên), **Xóa** (`deleteItemInTab` & `restoreDeletedItemInTab` hoàn tác xóa), và **Di chuyển dạng Cây thư mục** (`fetchFolderTreeForMove`, `moveItemInTab` & `undoMoveItemInTab` hoàn tác di chuyển).
 * **`repositories/`**:
   * **`data_sync_repository.dart`**: Quản lý quy trình lưu tức thì trên RAM và đồng bộ lên Google Drive ở **3 thời điểm vàng** (sau 30 giây dừng thao tác, khi thoát trang vở, khi ẩn app/tắt màn hình) hoặc khi bấm nút **Lưu**; đồng thời lắng nghe `connectivity_plus` để khóa màn hình ngay khi rớt mạng hoặc lỗi RAM.
@@ -229,14 +241,15 @@ Chứa các giá trị bất biến, thông số dòng kẻ và hàm tính toán
 #### D. Tầng `services/` (Các Dịch vụ Xử lý Chuyên biệt)
 * **`handwriting_recognition_service.dart`**: Quản lý `DigitalInkRecognizer` của Google ML Kit (ngôn ngữ `vi` - Tiếng Việt), tự động kiểm tra/tải gói ngôn ngữ và nhận diện danh sách nét bút (`List<List<StrokePointModel>>`) thành chuỗi văn bản tiếng Việt.
 * **`stylus_input_filter.dart`**: Bộ lọc phần cứng phân biệt tín hiệu Bút cảm ứng (`stylus`, `invertedStylus`), Chuột (`mouse`) và Chạm (`touch`), tự động chặn cảm ứng tì tay khi đầu bút đang chạm màn hình.
-* **`pdf_export_service.dart`**: Dịch vụ xuất nội dung trang vở ra file `.pdf` chuẩn A4.
+* **`pdf_export_service.dart`**: Template Dart sử dụng `pdf` + `PdfGoogleFonts.beVietnamPro*` (có bộ đệm font trên RAM `_getOrLoadFontsInRam`) dựng mảng byte `.pdf` chuẩn A4 trực tiếp trên RAM, giữ nguyên 100% bố cục 3 trang Phiếu đánh giá tiết dạy Tiểu học và vở 5 ô ly / 4 ô ly.
+* **`word_export_service.dart`**: Template Dart dựng mảng byte Word `.doc` (WordML Print-View chuẩn A4 kèm UTF-8 BOM `\uFEFF`) trực tiếp trên RAM, giữ nguyên khung bảng, dòng kẻ đứt, gộp ô `rowspan`/`colspan` và ngắt trang.
 
 #### E. Tầng `widgets/` (Các Widget & Hộp thoại Dùng chung Toàn App)
 * **`app_header_widget.dart`**: Thanh Header dùng chung gồm ô tìm kiếm tự co giãn, nút thông tin User góc phải và thanh chuyển đổi 2 Tab (`Ghi chú`, `Sổ dự giờ`).
 * **`center_notification_dialog.dart`**: Hộp thoại thông báo ngắn gọn chính giữa màn hình (`Thành công` tích xanh lá / `Thất bại` chữ X đỏ), tích hợp nút **`Hoàn tác`** cho thao tác Xóa và Di chuyển.
 * **`create_folder_dialog.dart`**: Hộp thoại nhập tên tạo Thư mục mới (tối đa 150 ký tự, kiểm tra chống trùng tên).
 * **`create_note_dialog.dart`**: Hộp thoại tạo Tệp ghi chú mới (nhập tên tối đa 150 ký tự, chống trùng tên, chọn mẫu **Vở 5 ô ly** hoặc **Vở 4 ô ly**).
-* **`create_observation_book_dialog.dart`**: Hộp thoại tạo Tệp sổ dự giờ mới (nhập tên tối đa 150 ký tự, chống trùng tên, hiển thị các biểu mẫu Sổ dự giờ từ `observation_templates/` theo **dạng Danh sách (List)** kèm tên biểu mẫu).
+* **`create_observation_book_dialog.dart`**: Hộp thoại tạo Tệp sổ dự giờ mới (nhập tên tối đa 150 ký tự, chống trùng tên, hiển thị biểu mẫu Sổ dự giờ từ `observation_templates/` theo **dạng Danh sách (List)** kèm tên biểu mẫu).
 * **`drive_folder_section_widget.dart`**: Widget hiển thị danh sách Thư mục & Tệp theo chế độ **Lưới ô (2/4/6 cột)** hoặc **Danh sách**, kèm thanh điều hướng **Quay lại** thư mục cha, nút **Làm mới** và nút chữ **`i`** trên mỗi mục.
 * **`item_actions_bottom_sheet.dart`**: Bottom Sheet khi bấm nút **`i`** trên Tệp/Thư mục, cung cấp 3 chức năng: **Đổi tên** (kiểm tra trùng tên), **Xóa** (có nút Hoàn tác), và **Di chuyển** (hiển thị **Cây thư mục Google Drive** đóng/mở đa cấp kèm nút Hoàn tác).
 * **`network_lock_overlay_widget.dart`**: Lớp phủ khóa màn hình bảo vệ dữ liệu khi phát hiện mất mạng hoặc lỗi bộ nhớ tạm RAM.
@@ -250,6 +263,7 @@ Chứa các giá trị bất biến, thông số dòng kẻ và hàm tính toán
 * **`features/notes/`**:
   * **`views/notes_screen.dart`**: Hiển thị cây thư mục và các tệp ghi chú trong Tab Ghi chú; bấm vào thư mục để đi sâu vào trong, bấm vào tệp để mở trang vở.
   * **`views/note_editor_screen.dart`**: Màn hình soạn thảo trang vở & biểu mẫu thông minh:
+    * Tích hợp nút **Xuất file** trên thanh Header cho phép xuất tệp đang mở ra **PDF (`.pdf`)** hoặc **Word (`.doc`)** từ RAM thẳng lên `MeetingBook/Export File/Ghi chú` hoặc `MeetingBook/Export File/Sổ dự giờ`.
     * Menu chọn chế độ: **Bàn phím** (hỗ trợ gõ Tiếng Việt kiểu Telex tích hợp sẵn), **Viết bút**, **Chỉ xem** (tiết kiệm API, chặn chỉnh sửa nhưng vẫn cho phép Zoom/cuộn trang), và **Làm mới** (tải lại JSON mới nhất từ Drive).
     * Hiển thị **con trỏ dọc `|` kèm nút nắm tròn** trên dòng đang chọn để người dùng chạm hoặc kéo ngang con trỏ đến vị trí cần thêm/sửa chữ.
     * Tự động nối dòng, ngắt từ xuống dòng như Microsoft Word và tự dàn lại chữ khi xoay ngang/dọc màn hình.
@@ -277,13 +291,13 @@ mkdir -p lib/core/constants/{note_templates,observation_templates} \
 touch lib/app.dart \
       lib/core/constants/app_colors.dart \
       lib/core/constants/note_templates/{note5x.dart,note4x.dart} \
-      lib/core/constants/observation_templates/{primary_school_evaluation_template.dart,blank_observation_template.dart} \
+      lib/core/constants/observation_templates/primary_school_evaluation_template.dart \
       lib/core/theme/app_theme.dart \
       lib/core/utils/coordinate_converter.dart \
       lib/data/models/{notebook_model.dart,page_model.dart,line_model.dart,stroke_point_model.dart} \
       lib/data/datasources/{local_storage_datasource.dart,google_drive_datasource.dart} \
       lib/data/repositories/data_sync_repository.dart \
-      lib/services/{handwriting_recognition_service.dart,pdf_export_service.dart,stylus_input_filter.dart} \
+      lib/services/{handwriting_recognition_service.dart,pdf_export_service.dart,word_export_service.dart,stylus_input_filter.dart} \
       lib/widgets/{app_header_widget.dart,center_notification_dialog.dart,create_folder_dialog.dart,create_note_dialog.dart,create_observation_book_dialog.dart,drive_folder_section_widget.dart,item_actions_bottom_sheet.dart,network_lock_overlay_widget.dart,user_profile_dialog.dart} \
       lib/features/auth/service/auth_service.dart \
       lib/features/auth/views/login_screen.dart \
@@ -300,25 +314,18 @@ touch lib/app.dart \
 
 ### 5.2. Danh sách các Thư viện (Packages) sử dụng trong Dự án & Lệnh cài đặt
 
-#### A. Các thư viện đã cài đặt và đang chạy trong `pubspec.yaml`:
+#### Các thư viện đã cài đặt và đang chạy trong `pubspec.yaml`:
 * **`google_fonts` (`^8.2.1`)**: Cung cấp bộ font chữ chuẩn Google Drive (`Be Vietnam Pro`) hỗ trợ tiếng Việt.
 * **`google_sign_in` (`6.2.2`)**: Xác thực và đăng nhập tài khoản Google trên thiết bị Android.
-* **`googleapis` (`^17.0.0`)**: Cung cấp bộ thư viện `DriveApi` (`v3`) để quản lý cây thư mục, tải lên và ghi đè file JSON trên Google Drive cá nhân.
+* **`googleapis` (`^17.0.0`)**: Cung cấp bộ thư viện `DriveApi` (`v3`) để quản lý cây thư mục, tải lên và ghi đè file JSON / PDF / Word trên Google Drive cá nhân.
 * **`http` (`^1.6.0`)**: Tạo `GoogleAuthClient` đính kèm mã xác thực OAuth vào các yêu cầu gọi Google Drive REST API.
-* **`shared_preferences` (`^2.5.6`)**: Chỉ dùng để lưu trạng thái duy trì phiên đăng nhập Gmail (`is_logged_in`, `user_email`, `user_display_name`, `user_photo_url`) và ID thư mục gốc.
+* **`shared_preferences` (`^2.5.6`)**: Chỉ dùng để lưu trạng thái duy trì phiên đăng nhập Gmail (`is_logged_in`, `user_email`, `user_display_name`, `user_photo_url`) và ID các thư mục gốc.
 * **`connectivity_plus` (`^7.3.2`)**: Kiểm tra trạng thái kết nối mạng khi đăng nhập và theo dõi đứt mạng giữa chừng để khóa thao tác bảo vệ dữ liệu.
 * **`google_mlkit_digital_ink_recognition` (`^0.16.1`)**: AI trên thiết bị (On-Device) chuyển nét vẽ viết tay trên bảng viết bút thành văn bản tiếng Việt (`vi`).
+* **`pdf` (`^3.13.1`) & `printing` (`^5.15.1`)**: Dựng trang vở ô ly và biểu mẫu dự giờ 3 trang thành mảng byte `.pdf` chuẩn A4 hỗ trợ đầy đủ Unicode Tiếng Việt (`PdfGoogleFonts`).
 
 ```bash
-flutter pub add google_fonts "google_sign_in:6.2.2" googleapis http shared_preferences connectivity_plus google_mlkit_digital_ink_recognition
-```
-
-#### B. Các thư viện bổ sung cho giai đoạn Xuất file PDF:
-* **`pdf` & `printing`**: Vẽ lại dòng kẻ vở và xuất trang vở ra file `.pdf` vector chuẩn A4.
-* **`path_provider`**: Truy xuất đường dẫn bộ nhớ đệm tạm thời khi xuất file.
-
-```bash
-flutter pub add pdf printing path_provider
+flutter pub add google_fonts "google_sign_in:6.2.2" googleapis http shared_preferences connectivity_plus google_mlkit_digital_ink_recognition pdf printing
 ```
 
 ---
@@ -328,7 +335,7 @@ flutter pub add pdf printing path_provider
 2. **Giai đoạn 2 (Giao diện Trang giấy 5 ô ly / 4 ô ly & Soạn thảo như Word):** Hoàn thiện `note5x.dart`, `note4x.dart` và `note_editor_screen.dart` để hiển thị mặt giấy kẻ ngang tự co giãn, hỗ trợ gõ Bàn phím Telex, tự xuống dòng/nối dòng và Chế độ Chỉ xem.
 3. **Giai đoạn 3 (Bảng viết Bút cảm ứng & AI Nhận diện chữ viết tay):** Hoàn thiện `pen_handwriting_pad_widget.dart`, `stylus_input_filter.dart` và `handwriting_recognition_service.dart` (Google ML Kit Digital Ink `vi`) để viết nét mực mượt 60–120fps, tự nối chữ/cách từ và trỏ/kéo con trỏ thêm chữ bù vào bất kỳ vị trí nào trên câu.
 4. **Giai đoạn 4 (Đồng bộ RAM 0ms $\rightarrow$ Google Drive):** Hoàn thiện `local_storage_datasource.dart` (chỉ lưu trên RAM `_ramCache`) và `data_sync_repository.dart` (đồng bộ ở 3 thời điểm vàng, nút Lưu thủ công và khóa màn hình khi mất mạng).
-5. **Giai đoạn 5 (Sổ dự giờ & Xuất PDF):** Mở rộng mô-đun `observation_book_screen.dart` và hoàn thiện `pdf_export_service.dart` để xuất trang vở ra file PDF chuẩn A4.
+5. **Giai đoạn 5 (Biểu mẫu Sổ dự giờ & Xuất file PDF / Word lên Google Drive):** Hoàn thiện `observation_book_screen.dart`, biểu mẫu 3 trang `primary_school_evaluation_template.dart`, cùng 2 dịch vụ `pdf_export_service.dart` và `word_export_service.dart` để kết xuất file `.pdf` / `.doc` trực tiếp trên RAM và đẩy thẳng vào thư mục `MeetingBook/Export File/{Ghi chú, Sổ dự giờ}` trên Google Drive.
 
 ---
 
@@ -342,7 +349,7 @@ Dịch vụ hoàn toàn **miễn phí 100%** và sử dụng trực tiếp dung 
 3. Vào menu bên trái: **APIs & Services** $\rightarrow$ **Library**.
 4. Tìm kiếm **`Google Drive API`** $\rightarrow$ Bấm chọn và nhấn **Enable (Bật)**.
 
-### 7.2. Bước 2: Thiết lập Google Auth Platform (OAuth Consent Screen)
+### 7.2. Bước 2: Thiết lập Google Auth Platform (OAuth Consent Screen) & Cấp quyền cho người khác đăng nhập
 Vào **APIs & Services** $\rightarrow$ **OAuth consent screen** (giao diện **Google Auth Platform**):
 1. **Mục `Overview`:**
    * Bấm nút **Get started** (Bắt đầu).
@@ -350,9 +357,20 @@ Vào **APIs & Services** $\rightarrow$ **OAuth consent screen** (giao diện **G
    * **User support email:** Chọn Gmail của bạn.
    * **Audience:** Chọn **External** (Cho phép mọi tài khoản Gmail cá nhân đăng nhập).
    * **Contact Information:** Nhập email liên hệ $\rightarrow$ Tích đồng ý điều khoản và bấm **Create**.
-2. **Mục `Audience`:**
-   * Kéo xuống phần **Test users** $\rightarrow$ Bấm **+ Add users**.
-   * Nhập địa chỉ Gmail cá nhân sẽ dùng để đăng nhập trên máy tính bảng/điện thoại (tối đa 100 Gmail thử nghiệm, hoặc bấm **Publish App** nếu muốn mở cho mọi Gmail không cần thêm tay) $\rightarrow$ Bấm **Save**.
+2. **Mục `Audience` (Chọn 1 trong 2 cách để cấp quyền cho người khác cài `.apk` và đăng nhập):**
+   * **Cách 1 — Nhanh nhất & không hiện cảnh báo khi đăng nhập (Khuyên dùng nếu gửi cho dưới 100 người):**
+     1. Ở mục **Test users**, bấm nút **`+ Add users`**.
+     2. Nhập địa chỉ Gmail của những người mà bạn gửi file `.apk` cho họ $\rightarrow$ bấm **Save**.
+     3. Người đó cài file `.apk` xong đăng nhập bằng Gmail đó là vào thẳng ứng dụng cực kỳ mượt!
+   * **Cách 2 — Mở khóa nút `Publish app` để ai cài `.apk` cũng tự đăng nhập được (Không cần thêm Gmail từng người):**
+     * Nếu nút **`Publish app`** ở mục *Publishing status* đang bị mờ kèm thông báo *"To publish your app, you must complete your configuration on the Branding page"*, để bật sáng nút này:
+     1. Bấm vào dòng chữ màu xanh **`Branding page`** ngay dưới nút `Publish app` (hoặc bấm mục **`Branding`** ở menu bên trái).
+     2. Kiểm tra và điền các mục bắt buộc còn trống:
+        * **App name:** Tên ứng dụng (ví dụ: `Meeting Book`)
+        * **User support email:** Chọn `caobach19112005@gmail.com`
+        * Kéo xuống mục **Developer contact information** (Email liên hệ nhà phát triển): Nhập `caobach19112005@gmail.com`
+        * Bấm nút **`Save`** ở dưới cùng.
+     3. Quay lại trang **`Audience`**, lúc này nút **`Publish app`** sẽ sáng lên $\rightarrow$ bấm vào **`Publish app`** $\rightarrow$ chọn **`Confirm`** để chuyển sang trạng thái **In production** là hoàn tất!
 
 ### 7.3. Bước 3: Tạo khóa kết nối Android (`Clients`)
 1. Ở menu trái của Google Auth Platform, chọn **`Clients`** $\rightarrow$ Bấm **+ Create Client** (hoặc trong **Credentials** $\rightarrow$ **+ Create Credentials** $\rightarrow$ **OAuth client ID**).
@@ -393,3 +411,15 @@ flutter pub add google_fonts "google_sign_in:^6.2.2" googleapis http shared_pref
 4. **Quản lý Tài khoản & Đăng xuất (`UserProfileDialog`):**
    * Tại góc bên phải của ô tìm kiếm trên Header có nút **Icon User**. Khi bấm vào sẽ hiển thị tên, địa chỉ Email đang đăng nhập, trạng thái liên kết Google Drive và nút **Đăng xuất**.
    * Chỉ khi người dùng chủ động bấm **Đăng xuất**, ứng dụng mới ngắt phiên `GoogleSignIn`, xóa `SharedPreferences` và quay trở về màn hình `LoginScreen`.
+
+### 7.6. Hướng dẫn Xuất file `.apk` để gửi cho người khác cài đặt & sử dụng
+1. **Chạy lệnh đóng gói `.apk` tại Terminal dự án:**
+   ```powershell
+   flutter build apk --release
+   ```
+2. **Đường dẫn lấy file `.apk` sau khi xuất xong:**
+   * `build\app\outputs\flutter-apk\app-release.apk`
+3. **Lưu ý về chữ ký SHA-1, R8 Minifier & Quyền đăng nhập:**
+   * Cấu hình `release` trong `android/app/build.gradle.kts` đã tắt `isMinifyEnabled = false` và `isShrinkResources = false` (tránh R8 cắt nhầm class `WorkDatabase` của Google ML Kit gây văng app khi khởi chạy) và dùng chung chữ ký `signingConfigs.getByName("debug")` trên máy tính phát triển, nên file `app-release.apk` xuất ra giữ nguyên mã **SHA-1** đã khai báo trên Google Cloud Console.
+   * Trong `android/app/src/main/AndroidManifest.xml` đã khai báo đầy đủ quyền `INTERNET`, `ACCESS_NETWORK_STATE` và `android:resizeableActivity="true"`.
+   * Bất kỳ thiết bị Android nào cài file `.apk` này đều đăng nhập Gmail và tự động khởi tạo cây thư mục `MeetingBook/` riêng trên Google Drive của người đó (kết hợp với **Cách 1** hoặc **Cách 2** tại mục **7.2**).

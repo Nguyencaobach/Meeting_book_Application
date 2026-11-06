@@ -34,6 +34,8 @@ class AppTheme {
       surface: AppColors.basicWhite,
       surfaceContainerHighest: AppColors.creamBackground,
       onSurface: AppColors.basicBlack, // Màu chữ đen tiêu chuẩn trên nền sáng
+      error: AppColors.dangerRed, // Màu đỏ cảnh báo / xóa / làm sạch trong Theme
+      onError: AppColors.basicWhite,
       brightness: Brightness.light,
     );
 

@@ -178,19 +178,29 @@ class DataSyncRepository with WidgetsBindingObserver {
     isSyncingDriveNotifier.value = true;
 
     try {
-      final String driveFileId =
-          await _driveDatasource.uploadOrOverwriteJsonFile(
-        tabIndex: _activeTabIndex,
-        customParentFolderId: _activeParentFolderId,
-        existingDriveFileId: _activeDriveFileId,
-        fileName: _activeFileName!,
-        jsonData: _latestJsonInRam!,
-      );
+      while (_isDirty &&
+          _latestJsonInRam != null &&
+          _activeDocumentId != null &&
+          _activeFileName != null) {
+        final Map<String, dynamic> snapshotToUpload =
+            Map<String, dynamic>.from(_latestJsonInRam!);
+        final String docIdToUpload = _activeDocumentId!;
+        _isDirty = false;
 
-      _activeDriveFileId = driveFileId;
-      _isDirty = false;
-      await _localDatasource.markSyncedToDrive(_activeDocumentId!);
+        final String driveFileId =
+            await _driveDatasource.uploadOrOverwriteJsonFile(
+          tabIndex: _activeTabIndex,
+          customParentFolderId: _activeParentFolderId,
+          existingDriveFileId: _activeDriveFileId,
+          fileName: _activeFileName!,
+          jsonData: snapshotToUpload,
+        );
+
+        _activeDriveFileId = driveFileId;
+        await _localDatasource.markSyncedToDrive(docIdToUpload);
+      }
     } catch (e) {
+      _isDirty = true;
       debugPrint('Chưa thể ghi đè lên Google Drive (giữ trong RAM/Local chờ gửi lại): $e');
     } finally {
       _isUploading = false;

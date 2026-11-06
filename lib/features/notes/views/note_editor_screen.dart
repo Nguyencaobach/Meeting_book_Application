@@ -4,7 +4,6 @@ import 'package:flutter/services.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../core/constants/note_templates/note4x.dart';
 import '../../../core/constants/note_templates/note5x.dart';
-import '../../../core/constants/observation_templates/blank_observation_template.dart';
 import '../../../core/constants/observation_templates/primary_school_evaluation_template.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/datasources/google_drive_datasource.dart';
@@ -12,21 +11,27 @@ import '../../../data/models/line_model.dart';
 import '../../../data/models/notebook_model.dart';
 import '../../../data/models/page_model.dart';
 import '../../../data/repositories/data_sync_repository.dart';
+import '../../../services/pdf_export_service.dart';
+import '../../../services/word_export_service.dart';
 import '../../../widgets/center_notification_dialog.dart';
 import 'widgets/pen_handwriting_pad_widget.dart';
 
 // ===========================================================================
 // CÁC CHẾ ĐỘ & TÁC VỤ TRONG MENU CỦA TRANG GHI CHÚ:
-// - viewOnly : Chỉ xem (Không cho chọn dòng hay chỉnh sửa, không chạy kiểm tra/đồng bộ Drive để tiết kiệm API)
-// - keyboard : Bàn phím hệ thống máy
-// - pen      : Viết bút (Mở Bottom Sheet trắng cao nửa màn hình)
-// - refresh  : Làm mới (Tải lại nội dung mới nhất của tệp từ Google Drive giống ngoài màn hình Home)
+// - viewOnly     : Chỉ xem (Không cho chọn dòng hay chỉnh sửa, không chạy kiểm tra/đồng bộ Drive để tiết kiệm API)
+// - keyboard     : Bàn phím hệ thống máy
+// - pen          : Viết bút (Mở Bottom Sheet trắng cao nửa màn hình)
+// - exportFile   : Xuất file (Xuất tệp đang mở ra PDF .pdf hoặc Word .doc vào thư mục Export File trên Google Drive)
+// - refresh      : Làm mới (Tải lại nội dung mới nhất của tệp từ Google Drive giống ngoài màn hình Home)
+// - clearContent : Làm sạch (Xóa toàn bộ nội dung hiện tại trong tệp, có hộp thoại xác nhận & nút Hoàn tác)
 // ===========================================================================
 enum NoteInputMode {
   viewOnly,
   keyboard,
   pen,
+  exportFile,
   refresh,
+  clearContent,
 }
 
 // ===========================================================================
@@ -119,13 +124,17 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   static const double _zoomStep = 0.25;
   double _zoomScale = 1.0;
 
+  // Trạng thái đang xuất file PDF hoặc Word từ RAM lên thư mục Export File trên Google Drive
+  bool _isExportingFile = false;
+
   /// Mã định danh biểu mẫu / mẫu giấy hiện tại của tệp
   String get _activeTemplateId =>
       _notebook?.paperTemplate ?? widget.fileItem.paperTemplate;
 
-  /// Kiểm tra xem tệp đang mở có phải là "Phiếu đánh giá tiết dạy giáo viên cấp Tiểu học" không
+  /// Kiểm tra xem tệp đang mở có phải là biểu mẫu Sổ dự giờ ("Phiếu đánh giá tiết dạy giáo viên cấp Tiểu học") không
   bool get _isPrimaryEvalTemplate =>
-      _activeTemplateId == PrimarySchoolEvaluationTemplate.templateId;
+      widget.tabIndex == 1 ||
+      PrimarySchoolEvaluationTemplate.isObservationTemplate(_activeTemplateId);
 
   /// Lấy giới hạn dòng đầu - dòng cuối của vùng chứa `rowIndex`
   ({int minRow, int maxRow, bool isSingleLine}) _getRowSectionBounds(
@@ -453,21 +462,35 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   }
 
   /// Tính chính xác vị trí ký tự (cleanOffset) tại điểm chạm ngang `tapLocalDx` trên câu
+  /// (Hỗ trợ cả trường căn trái `TextAlign.left` và trường căn giữa `TextAlign.center` như Ô điểm, Ngày/Tháng/Năm)
   int _calculateCleanOffsetFromTapDx({
     required String cleanText,
     required double tapLocalDx,
     required double horizontalPadding,
     required TextStyle rowTextStyle,
+    TextAlign textAlign = TextAlign.left,
+    double? maxFieldTextWidth,
+    bool isDraggingCursor = false,
   }) {
     if (cleanText.isEmpty) return 0;
-    final double textX =
-        (tapLocalDx - horizontalPadding).clamp(0.0, double.infinity);
     final TextPainter painter = TextPainter(
       text: TextSpan(text: cleanText, style: rowTextStyle),
       maxLines: 1,
       textDirection: TextDirection.ltr,
       textScaler: MediaQuery.textScalerOf(context),
     )..layout(minWidth: 0, maxWidth: double.infinity);
+
+    double textStartX = horizontalPadding;
+    if (textAlign == TextAlign.center && maxFieldTextWidth != null) {
+      textStartX += math.max(0.0, (maxFieldTextWidth - painter.width) / 2.0);
+      // Nếu người dùng chỉ chạm đơn (không phải kéo con trỏ) vào khoảng trống bên trái chữ căn giữa
+      // thì ưu tiên đặt con trỏ về cuối chuỗi để nhập tiếp thay vì nhảy về đầu chuỗi
+      if (!isDraggingCursor && tapLocalDx < textStartX - 4.0) {
+        return cleanText.length;
+      }
+    }
+
+    final double textX = (tapLocalDx - textStartX).clamp(0.0, double.infinity);
 
     return painter
         .getPositionForOffset(Offset(textX, 0))
@@ -493,6 +516,9 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     double? tapLocalDx,
     double? horizontalPadding,
     TextStyle? rowTextStyle,
+    TextAlign textAlign = TextAlign.left,
+    double? maxFieldTextWidth,
+    bool isDraggingCursor = false,
   }) {
     // Nếu đang ở chế độ "Chỉ xem" hoặc đang có lỗi bộ nhớ RAM -> Chặn ngay không cho bấm chọn dòng
     if (_isViewOnlyMode || _syncRepository.hasRamErrorNotifier.value) {
@@ -502,10 +528,18 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
 
     final TextEditingController ctrl = _getOrCreateRowController(rowIndex);
     final String clean = _cleanText(ctrl.text);
+    final bool wasRowAlreadySelected = _selectedRowIndex == rowIndex;
 
-    // Xác định vị trí con trỏ tại điểm bút/tay vừa chạm vào câu (để chèn bù chữ thiếu ngay tại đó)
+    // Xác định vị trí con trỏ:
+    // - Nếu người dùng mới chạm chọn vào một ô căn giữa (Ô điểm 500..511, Ngày/Tháng/Năm 601..603, Họ tên ký 604)
+    //   thì luôn đặt con trỏ trỏ về phía sau cùng (clean.length) để nhập tiếp ngay lập tức.
+    // - Khi ô đã được chọn, người dùng có thể chạm trực tiếp lên chữ hoặc nắm kéo ngang con trỏ đến mọi vị trí ký tự.
     final int targetCleanOffset;
-    if (tapLocalDx != null &&
+    if (!wasRowAlreadySelected &&
+        !isDraggingCursor &&
+        textAlign == TextAlign.center) {
+      targetCleanOffset = clean.length;
+    } else if (tapLocalDx != null &&
         horizontalPadding != null &&
         rowTextStyle != null) {
       targetCleanOffset = _calculateCleanOffsetFromTapDx(
@@ -513,9 +547,12 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         tapLocalDx: tapLocalDx,
         horizontalPadding: horizontalPadding,
         rowTextStyle: rowTextStyle,
+        textAlign: textAlign,
+        maxFieldTextWidth: maxFieldTextWidth,
+        isDraggingCursor: isDraggingCursor,
       );
     } else {
-      targetCleanOffset = _getRowCleanCursorOffset(rowIndex);
+      targetCleanOffset = clean.length;
     }
 
     _setRowCleanText(
@@ -1152,8 +1189,11 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   }
 
   /// Đóng gói dữ liệu sạch của các dòng vào JSON (RAM 0ms + hẹn 30 giây đẩy lên Google Drive)
-  Future<void> _saveLinesToRamAndScheduleDriveSync() async {
-    if (_isViewOnlyMode || _syncRepository.hasRamErrorNotifier.value) {
+  Future<void> _saveLinesToRamAndScheduleDriveSync({
+    bool forceSave = false,
+  }) async {
+    if ((!forceSave && _isViewOnlyMode) ||
+        _syncRepository.hasRamErrorNotifier.value) {
       return;
     }
 
@@ -1185,7 +1225,12 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
           updatedPages[_currentPageIndex].copyWith(lines: updatedLines);
     }
 
+    final String effectiveTemplate = _isPrimaryEvalTemplate
+        ? PrimarySchoolEvaluationTemplate.templateId
+        : _activeTemplateId;
+
     final NotebookModel updatedNotebook = currentNotebook.copyWith(
+      paperTemplate: effectiveTemplate,
       updatedAt: DateTime.now().toIso8601String(),
       pages: updatedPages,
     );
@@ -1248,12 +1293,603 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     }
   }
 
+  /// Tạo bản chụp (Snapshot) NotebookModel mới nhất trên RAM từ các dòng đang hiển thị trên màn hình
+  /// để phục vụ xuất file PDF / Word chuẩn xác 100% nội dung vừa nhập
+  NotebookModel _buildLatestNotebookSnapshotInRam() {
+    final List<LineModel> currentLines = <LineModel>[];
+    final List<int> sortedRowIndices = _rowControllers.keys.toList()..sort();
+
+    for (final int idx in sortedRowIndices) {
+      final String textValue = _cleanText(_rowControllers[idx]?.text ?? '');
+      if (textValue.trim().isNotEmpty) {
+        currentLines.add(
+          LineModel(
+            rowIndex: idx,
+            text: textValue,
+          ),
+        );
+      }
+    }
+
+    final NotebookModel? baseNotebook = _notebook;
+    final String effectiveTemplate = _isPrimaryEvalTemplate
+        ? PrimarySchoolEvaluationTemplate.templateId
+        : _activeTemplateId;
+
+    if (baseNotebook == null) {
+      return NotebookModel(
+        id: widget.fileItem.id,
+        title: widget.fileItem.displayName,
+        paperTemplate: effectiveTemplate,
+        updatedAt: DateTime.now().toIso8601String(),
+        pages: <PageModel>[
+          PageModel(pageNumber: 1, lines: currentLines),
+        ],
+      );
+    }
+
+    final List<PageModel> updatedPages =
+        List<PageModel>.from(baseNotebook.pages);
+    if (updatedPages.isEmpty) {
+      updatedPages.add(PageModel(pageNumber: 1, lines: currentLines));
+    } else {
+      updatedPages[_currentPageIndex] =
+          updatedPages[_currentPageIndex].copyWith(lines: currentLines);
+    }
+
+    return baseNotebook.copyWith(
+      paperTemplate: effectiveTemplate,
+      updatedAt: DateTime.now().toIso8601String(),
+      pages: updatedPages,
+    );
+  }
+
+  /// Hiển thị hộp thoại chọn định dạng Xuất file (PDF hoặc Word)
+  /// và đẩy thẳng file xuất từ RAM vào thư mục `MeetingBook/Export File/Ghi chú` hoặc `MeetingBook/Export File/Sổ dự giờ`
+  Future<void> _showExportFileDialog() async {
+    if (_isExportingFile || _isLoadingJson) return;
+
+    FocusScope.of(context).unfocus();
+    SystemChannels.textInput.invokeMethod('TextInput.hide');
+
+    final int effectiveTabIndex =
+        (widget.tabIndex == 1 || _isPrimaryEvalTemplate) ? 1 : 0;
+    final String subFolderLabel =
+        effectiveTabIndex == 1 ? 'Sổ dự giờ' : 'Ghi chú';
+    final String currentTitle = _notebook?.title ?? widget.fileItem.displayName;
+
+    final String? selectedFormat = await showDialog<String>(
+      context: context,
+      barrierDismissible: true,
+      builder: (BuildContext dialogContext) {
+        final double titleSize =
+            AppTheme.getResponsiveFontSize(dialogContext, 18);
+        final double bodySize =
+            AppTheme.getResponsiveFontSize(dialogContext, 14);
+        final double subSize =
+            AppTheme.getResponsiveFontSize(dialogContext, 12.5);
+
+        return Dialog(
+          backgroundColor: AppColors.creamBackground,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+            side: const BorderSide(
+              color: AppColors.primaryBlue,
+              width: 2,
+            ),
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 20, 22, 18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: AppColors.primaryBlue,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(
+                          Icons.ios_share_rounded,
+                          color: AppColors.basicWhite,
+                          size: 22,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Xuất tệp lên Google Drive',
+                          style: TextStyle(
+                            color: AppColors.primaryBlue,
+                            fontSize: titleSize,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.of(dialogContext).pop(),
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          color: AppColors.basicBlack,
+                        ),
+                        tooltip: 'Đóng',
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.basicWhite,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: AppColors.primaryBlue.withValues(alpha: 0.25),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Tệp đang mở: $currentTitle',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: AppColors.basicBlack,
+                            fontSize: bodySize,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.folder_special_outlined,
+                              color: AppColors.primaryBlue,
+                              size: 16,
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                'Nơi lưu: MeetingBook / Export File / $subFolderLabel',
+                                style: TextStyle(
+                                  color: AppColors.primaryBlue,
+                                  fontSize: subSize,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Chọn định dạng tệp muốn xuất:',
+                    style: TextStyle(
+                      color: AppColors.basicBlack,
+                      fontSize: subSize,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Lựa chọn 1: Xuất file PDF
+                  InkWell(
+                    borderRadius: BorderRadius.circular(16),
+                    onTap: () => Navigator.of(dialogContext).pop('pdf'),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.basicWhite,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: AppColors.primaryBlue,
+                          width: 1.5,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: AppColors.creamBackground,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: AppColors.primaryBlue
+                                    .withValues(alpha: 0.3),
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.picture_as_pdf_rounded,
+                              color: AppColors.primaryBlue,
+                              size: 24,
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Text(
+                              'Xuất file PDF',
+                              style: TextStyle(
+                                color: AppColors.primaryBlue,
+                                fontSize: bodySize * 1.04,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          const Icon(
+                            Icons.chevron_right_rounded,
+                            color: AppColors.primaryBlue,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+
+                  // Lựa chọn 2: Xuất file Word
+                  InkWell(
+                    borderRadius: BorderRadius.circular(16),
+                    onTap: () => Navigator.of(dialogContext).pop('word'),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 14,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.basicWhite,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: AppColors.primaryBlue,
+                          width: 1.5,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: AppColors.creamBackground,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: AppColors.primaryBlue
+                                    .withValues(alpha: 0.3),
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.description_rounded,
+                              color: AppColors.primaryBlue,
+                              size: 24,
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Text(
+                              'Xuất file Word',
+                              style: TextStyle(
+                                color: AppColors.primaryBlue,
+                                fontSize: bodySize * 1.04,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          const Icon(
+                            Icons.chevron_right_rounded,
+                            color: AppColors.primaryBlue,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    if (!mounted || selectedFormat == null) return;
+    await _handleExportFile(isPdf: selectedFormat == 'pdf');
+  }
+
+  /// Xử lý tạo mảng byte PDF / Word ngay trên RAM (không lưu ổ cứng)
+  /// và đẩy thẳng lên thư mục `MeetingBook/Export File/Ghi chú` hoặc `MeetingBook/Export File/Sổ dự giờ`
+  Future<void> _handleExportFile({required bool isPdf}) async {
+    if (_isExportingFile) return;
+
+    setState(() {
+      _isExportingFile = true;
+    });
+
+    try {
+      // Đồng bộ dữ liệu mới nhất vào RAM trước khi xuất
+      if (!_isViewOnlyMode) {
+        await _saveLinesToRamAndScheduleDriveSync();
+      }
+
+      final NotebookModel snapshot = _buildLatestNotebookSnapshotInRam();
+      final int effectiveTabIndex =
+          (widget.tabIndex == 1 || _isPrimaryEvalTemplate) ? 1 : 0;
+      final String subFolderLabel =
+          effectiveTabIndex == 1 ? 'Sổ dự giờ' : 'Ghi chú';
+      final String baseName = snapshot.title.trim().isNotEmpty
+          ? snapshot.title.trim()
+          : widget.fileItem.displayName;
+
+      // 1. Khởi tạo byte PDF hoặc Word trực tiếp trên RAM
+      final Uint8List exportedBytes = isPdf
+          ? await PdfExportService.generatePdfBytes(
+              notebook: snapshot,
+              tabIndex: effectiveTabIndex,
+            )
+          : WordExportService.generateWordBytes(
+              notebook: snapshot,
+              tabIndex: effectiveTabIndex,
+            );
+
+      final String extension = isPdf ? '.pdf' : '.doc';
+      final String mimeType =
+          isPdf ? 'application/pdf' : 'application/msword';
+
+      // 2. Đẩy thẳng từ RAM lên đúng thư mục con trong `MeetingBook/Export File/` trên Google Drive
+      await _driveDatasource.uploadExportedFileToDrive(
+        tabIndex: effectiveTabIndex,
+        baseFileName: baseName,
+        extension: extension,
+        mimeType: mimeType,
+        fileBytes: exportedBytes,
+      );
+
+      if (mounted) {
+        setState(() {
+          _isExportingFile = false;
+        });
+
+        final String exportedFullName = baseName.toLowerCase().endsWith(extension)
+            ? baseName
+            : '$baseName$extension';
+
+        await showCenterNotification(
+          context: context,
+          title: isPdf
+              ? 'Xuất file PDF thành công'
+              : 'Xuất file Word thành công',
+          message:
+              'Đã xuất "$exportedFullName" chuẩn định dạng lên Google Drive tại:\nMeetingBook / Export File / $subFolderLabel',
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isExportingFile = false;
+        });
+        await showCenterNotification(
+          context: context,
+          title: 'Xuất file thất bại',
+          message:
+              'Không thể xuất tệp lên Google Drive. Vui lòng kiểm tra kết nối mạng và thử lại!',
+          isError: true,
+        );
+      }
+    }
+  }
+
+  /// Hộp thoại xác nhận "Làm sạch" toàn bộ nội dung hiện tại trong tệp (áp dụng cho cả Ghi chú & Sổ dự giờ)
+  /// Khi bấm "Đồng ý" -> Xóa sạch toàn bộ nội dung trong tệp và hiển thị thông báo Thành công kèm nút "Hoàn tác"
+  Future<void> _showClearContentConfirmDialog() async {
+    if (_isLoadingJson || _isExportingFile) return;
+
+    FocusScope.of(context).unfocus();
+    SystemChannels.textInput.invokeMethod('TextInput.hide');
+
+    final String itemTypeLabel =
+        _isPrimaryEvalTemplate ? 'sổ dự giờ' : 'ghi chú';
+    final String fileDisplayName = widget.fileItem.displayName;
+    bool isClearing = false;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        final Size screenSize = MediaQuery.sizeOf(dialogContext);
+        final double dialogWidth =
+            (screenSize.width * 0.68).clamp(320.0, 540.0);
+        final double horizontalPadding =
+            (screenSize.width * 0.045).clamp(24.0, 36.0);
+        final double verticalPadding =
+            (screenSize.height * 0.032).clamp(22.0, 34.0);
+
+        final double titleFontSize =
+            AppTheme.getResponsiveFontSize(dialogContext, 19);
+        final double bodyFontSize =
+            AppTheme.getResponsiveFontSize(dialogContext, 15);
+
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            Future<void> confirmClearContent() async {
+              setDialogState(() => isClearing = true);
+
+              // Lưu bản chụp (Snapshot) toàn bộ nội dung trước khi làm sạch để hỗ trợ Hoàn tác 100%
+              final NotebookModel backupSnapshot =
+                  _buildLatestNotebookSnapshotInRam();
+
+              try {
+                _lastCleanRowTexts.clear();
+                for (final TextEditingController ctrl
+                    in _rowControllers.values) {
+                  ctrl.clear();
+                }
+
+                if (mounted) {
+                  setState(() {
+                    _selectedRowIndex = null;
+                    _isPenSheetOpen = false;
+                  });
+                }
+
+                await _saveLinesToRamAndScheduleDriveSync(forceSave: true);
+                await _syncRepository.syncOnPageExit();
+
+                if (dialogContext.mounted) {
+                  Navigator.of(dialogContext).pop();
+                }
+
+                if (mounted) {
+                  await showCenterNotification(
+                    context: this.context,
+                    title: 'Thành công',
+                    message:
+                        'Đã làm sạch nội dung tệp $itemTypeLabel "$fileDisplayName"',
+                    onUndo: () async {
+                      _applyNotebookToRowControllers(
+                        backupSnapshot,
+                        pageIndex: _currentPageIndex,
+                      );
+                      if (mounted) {
+                        setState(() {
+                          _notebook = backupSnapshot;
+                        });
+                      }
+                      await _saveLinesToRamAndScheduleDriveSync(
+                        forceSave: true,
+                      );
+                      await _syncRepository.syncOnPageExit();
+                    },
+                  );
+                }
+              } catch (_) {
+                if (dialogContext.mounted) {
+                  Navigator.of(dialogContext).pop();
+                }
+                if (mounted) {
+                  await showCenterNotification(
+                    context: this.context,
+                    title: 'Thất bại',
+                    message:
+                        'Không thể làm sạch nội dung tệp "$fileDisplayName"',
+                    isError: true,
+                  );
+                }
+              }
+            }
+
+            return Dialog(
+              backgroundColor: AppColors.basicWhite,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(28),
+              ),
+              child: SizedBox(
+                width: dialogWidth,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: horizontalPadding,
+                    vertical: verticalPadding,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Xác nhận làm sạch nội dung',
+                        style: TextStyle(
+                          color: AppColors.primaryBlue,
+                          fontSize: titleFontSize,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        'Bạn có chắc chắn muốn xóa toàn bộ nội dung hiện tại trong tệp $itemTypeLabel "$fileDisplayName" không?',
+                        style: TextStyle(
+                          color: AppColors.basicBlack,
+                          fontSize: bodyFontSize,
+                          height: 1.45,
+                        ),
+                      ),
+                      SizedBox(height: verticalPadding * 0.85),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: isClearing
+                                ? null
+                                : () => Navigator.of(dialogContext).pop(),
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 14,
+                              ),
+                            ),
+                            child: Text(
+                              'Hủy',
+                              style: TextStyle(
+                                color: AppColors.basicBlack,
+                                fontSize: bodyFontSize,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          ElevatedButton(
+                            onPressed: isClearing ? null : confirmClearContent,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.dangerRed,
+                              foregroundColor: AppColors.basicWhite,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 24,
+                                vertical: 14,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                            child: isClearing
+                                ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2.2,
+                                      color: AppColors.basicWhite,
+                                    ),
+                                  )
+                                : Text(
+                                    'Đồng ý',
+                                    style: TextStyle(
+                                      color: AppColors.basicWhite,
+                                      fontSize: bodyFontSize,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final String activeTemplate = _activeTemplateId;
     final bool isNote4x = activeTemplate == Note4x.templateId;
-    final bool isObservationBlank =
-        activeTemplate == BlankObservationTemplate.templateId;
     final bool isPrimaryEval = _isPrimaryEvalTemplate;
 
     final Size screenSize = MediaQuery.sizeOf(context);
@@ -1267,11 +1903,9 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         ? PrimarySchoolEvaluationTemplate.getResponsivePaperWidth(
             screenSize.width,
           )
-        : (isObservationBlank
-            ? BlankObservationTemplate.getResponsivePaperWidth(screenSize.width)
-            : (isNote4x
-                ? Note4x.getResponsivePaperWidth(screenSize.width)
-                : Note5x.getResponsivePaperWidth(screenSize.width)));
+        : (isNote4x
+            ? Note4x.getResponsivePaperWidth(screenSize.width)
+            : Note5x.getResponsivePaperWidth(screenSize.width));
     final double scaledPaperWidth = paperWidth * _zoomScale;
     final bool needsHorizontalScroll =
         scaledPaperWidth > screenSize.width + 1.0;
@@ -1287,8 +1921,8 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       child: Scaffold(
         // Cho phép màn hình co giãn mượt khi bàn phím hệ thống bật lên để bộ cuộn lướt bình thường
         resizeToAvoidBottomInset: true,
-        backgroundColor: (isPrimaryEval || isObservationBlank)
-            ? BlankObservationTemplate.getPaperBackgroundColor()
+        backgroundColor: isPrimaryEval
+            ? PrimarySchoolEvaluationTemplate.getPaperBackgroundColor()
             : (isNote4x
                 ? Note4x.getPaperBackgroundColor()
                 : Note5x.getPaperBackgroundColor()),
@@ -1319,7 +1953,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                                   alignment: Alignment.centerLeft,
                                   child: ConstrainedBox(
                                     constraints: BoxConstraints(
-                                      maxWidth: screenSize.width * 0.5,
+                                      maxWidth: screenSize.width * 0.45,
                                     ),
                                     child: Row(
                                       mainAxisSize: MainAxisSize.min,
@@ -1479,7 +2113,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                                         ),
                                         const SizedBox(width: 8),
 
-                                        // 3. Nút Menu 3 gạch nằm sát bên phải (Bấm vào hiện lựa chọn "Chỉ xem", "Bàn phím" và "Viết bút")
+                                        // 3. Nút Menu 3 gạch nằm sát bên phải (Gom các nút: Chỉ xem, Bàn phím, Viết bút, Xuất file, Làm mới)
                                         _buildInputModeMenuButton(
                                           hasRamError: hasRamError,
                                           fontSize: badgeFontSize,
@@ -1503,7 +2137,6 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                     ignoring: hasRamError,
                     child: _buildPaperBody(
                       isNote4x: isNote4x,
-                      isObservationBlank: isObservationBlank,
                       isPrimaryEval: isPrimaryEval,
                       hasRamError: hasRamError,
                     ),
@@ -1652,7 +2285,6 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   /// và giới hạn chiều ngang viết tự động xuống dòng khi viết hết chiều ngang giấy
   Widget _buildPaperBody({
     required bool isNote4x,
-    required bool isObservationBlank,
     required bool isPrimaryEval,
     required bool hasRamError,
   }) {
@@ -1705,21 +2337,17 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
             ? PrimarySchoolEvaluationTemplate.getResponsivePaperWidth(
                 constraints.maxWidth,
               )
-            : (isObservationBlank
-                ? BlankObservationTemplate.getResponsivePaperWidth(
-                    constraints.maxWidth,
-                  )
-                : (isNote4x
-                    ? Note4x.getResponsivePaperWidth(constraints.maxWidth)
-                    : Note5x.getResponsivePaperWidth(constraints.maxWidth)));
+            : (isNote4x
+                ? Note4x.getResponsivePaperWidth(constraints.maxWidth)
+                : Note5x.getResponsivePaperWidth(constraints.maxWidth));
         final double scaledPaperWidth = paperWidth * _zoomScale;
         final bool enableHorizontalScroll =
             scaledPaperWidth > constraints.maxWidth + 1.0;
         final bool isZoomedIn = _zoomScale > 1.01;
 
         // Tính chiều cao mỗi dòng kẻ ngang dựa trên mẫu vở 5 ô ly (note5x), 4 ô ly (note4x) hoặc biểu mẫu Sổ dự giờ
-        final double rowHeight = (isPrimaryEval || isObservationBlank)
-            ? BlankObservationTemplate.getResponsiveRowHeight(
+        final double rowHeight = isPrimaryEval
+            ? PrimarySchoolEvaluationTemplate.getResponsiveRowHeight(
                 context,
                 maxWidth: paperWidth,
               )
@@ -1733,8 +2361,8 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                     maxWidth: paperWidth,
                   ));
 
-        final double horizontalPadding = (isPrimaryEval || isObservationBlank)
-            ? BlankObservationTemplate.getResponsiveHorizontalPadding(
+        final double horizontalPadding = isPrimaryEval
+            ? PrimarySchoolEvaluationTemplate.getResponsiveHorizontalPadding(
                 paperWidth,
               )
             : (isNote4x
@@ -1751,8 +2379,8 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         final TextStyle effectiveRowTextStyle =
             (Theme.of(context).textTheme.bodyMedium ?? const TextStyle())
                 .copyWith(
-          color: (isPrimaryEval || isObservationBlank)
-              ? BlankObservationTemplate.getTextColor()
+          color: isPrimaryEval
+              ? PrimarySchoolEvaluationTemplate.getTextColor()
               : (isNote4x ? Note4x.getTextColor() : Note5x.getTextColor()),
           fontSize: lineFontSize,
           fontWeight: FontWeight.w500,
@@ -1897,9 +2525,8 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         // Tính tổng số dòng sao cho luôn phủ kín màn hình và tự giãn thêm khi viết dài
         final int minRowsToFillScreen =
             (constraints.maxHeight / rowHeight).ceil() + 4;
-        final int defaultMinRows = isObservationBlank
-            ? BlankObservationTemplate.defaultLineCount
-            : (isNote4x ? Note4x.defaultLineCount : Note5x.defaultLineCount);
+        final int defaultMinRows =
+            isNote4x ? Note4x.defaultLineCount : Note5x.defaultLineCount;
         final int highestUsedRow = _rowControllers.keys.isEmpty
             ? 0
             : (_rowControllers.keys.reduce(math.max) + 6);
@@ -1918,20 +2545,15 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
             // Chế độ "Chỉ xem": cho phép cuộn trang vở mượt mà nhưng chặn hoàn toàn chọn dòng / chỉnh sửa
             ignoring: _isViewOnlyMode,
             child: CustomPaint(
-              painter: isObservationBlank
-                  ? BlankObservationPaperPainter(
+              painter: isNote4x
+                  ? Note4xHorizontalPaperPainter(
                       rowHeight: rowHeight,
                       totalRows: totalRows,
                     )
-                  : (isNote4x
-                      ? Note4xHorizontalPaperPainter(
-                          rowHeight: rowHeight,
-                          totalRows: totalRows,
-                        )
-                      : Note5xHorizontalPaperPainter(
-                          rowHeight: rowHeight,
-                          totalRows: totalRows,
-                        )),
+                  : Note5xHorizontalPaperPainter(
+                      rowHeight: rowHeight,
+                      totalRows: totalRows,
+                    ),
               child: Column(
                 children: List<Widget>.generate(totalRows, (int rowIndex) {
                   final TextEditingController controller =
@@ -2184,9 +2806,13 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     final FocusNode focusNode = _getOrCreateRowFocusNode(rowIndex);
     final bool isRowSelected =
         !_isViewOnlyMode && _selectedRowIndex == rowIndex;
+    final double innerFieldWidth = math.max(
+      16.0,
+      width - (horizontalPadding * 2),
+    );
     final double maxFieldTextWidth = math.max(
       24.0,
-      width - (horizontalPadding * 2) - 2.0,
+      innerFieldWidth - 2.0,
     );
     final bounds = _getRowSectionBounds(rowIndex);
 
@@ -2200,6 +2826,8 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                 tapLocalDx: details.localPosition.dx,
                 horizontalPadding: horizontalPadding,
                 rowTextStyle: textStyle,
+                textAlign: textAlign,
+                maxFieldTextWidth: innerFieldWidth,
               ),
       onHorizontalDragUpdate:
           (_isViewOnlyMode || (!isRowSelected && !_isPenMode))
@@ -2210,6 +2838,9 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                     tapLocalDx: details.localPosition.dx,
                     horizontalPadding: horizontalPadding,
                     rowTextStyle: textStyle,
+                    textAlign: textAlign,
+                    maxFieldTextWidth: innerFieldWidth,
+                    isDraggingCursor: true,
                   ),
       child: Container(
         width: width,
@@ -2227,12 +2858,14 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                   ? Alignment.bottomCenter
                   : Alignment.bottomLeft,
               child: IgnorePointer(
-                ignoring: _isViewOnlyMode || !isRowSelected || _isPenMode,
+                // Để GestureDetector bên ngoài bắt 100% điểm chạm & thao tác kéo ngang con trỏ
+                // cho cả chế độ Bàn phím và Viết bút (không bị TextField chặn kéo hoặc nhảy con trỏ về đầu)
+                ignoring: true,
                 child: TextField(
                   controller: controller,
                   focusNode: focusNode,
                   readOnly: _isViewOnlyMode || _isPenMode || hasRamError,
-                  showCursor: _isKeyboardMode && isRowSelected,
+                  showCursor: false,
                   cursorColor: AppColors.primaryBlue,
                   cursorWidth: 2.2,
                   maxLines: 1,
@@ -2240,9 +2873,6 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                   keyboardType: keyboardType,
                   scrollPhysics: const NeverScrollableScrollPhysics(),
                   textInputAction: TextInputAction.next,
-                  onTap: _isViewOnlyMode
-                      ? null
-                      : () => _handleSelectRow(rowIndex, height),
                   onChanged: (value) => _onRowTextChanged(
                     rowIndex,
                     value,
@@ -2263,7 +2893,15 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                                     PrimarySchoolEvaluationTemplate
                                         .scoreRowCount -
                                     1)) {
-                      _handleSelectRow(rowIndex + 1, height);
+                      _handleSelectRow(
+                        rowIndex + 1,
+                        height,
+                        textAlign: PrimarySchoolEvaluationTemplate.isScoreRow(
+                          rowIndex + 1,
+                        )
+                            ? TextAlign.center
+                            : TextAlign.left,
+                      );
                     } else {
                       _closeKeyboardAndDeselectRow();
                     }
@@ -2277,7 +2915,10 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                     contentPadding: EdgeInsets.only(
                       bottom: bottomContentPadding,
                     ),
-                    hintText: !_isViewOnlyMode ? hintText : null,
+                    hintText: (!_isViewOnlyMode &&
+                            (!isRowSelected || textAlign != TextAlign.center))
+                        ? hintText
+                        : null,
                     hintStyle: TextStyle(
                       color: AppColors.primaryBlue.withValues(alpha: 0.35),
                       fontSize: (textStyle.fontSize ?? 14.0) * 0.9,
@@ -2288,8 +2929,9 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
               ),
             ),
 
-            // Con trỏ + nút nắm kéo (Handle) hiển thị trực quan trên ô đang chọn ở chế độ Viết bút
-            if (isRowSelected && _isPenMode)
+            // Con trỏ + nút nắm kéo (Handle) hiển thị trực quan trên ô đang chọn (cả Bàn phím & Viết bút)
+            // Tự động căn đúng toạ độ chữ kể cả khi ô căn giữa (TextAlign.center) như Ô điểm và Ngày/Tháng/Năm
+            if (isRowSelected)
               ValueListenableBuilder<TextEditingValue>(
                 valueListenable: controller,
                 builder: (context, textValue, _) {
@@ -2298,13 +2940,22 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                       _getRowCleanCursorOffset(rowIndex).clamp(0, clean.length);
                   final String textBeforeCursor =
                       clean.substring(0, cleanCursor);
-                  final double cursorX = _measureTextWidth(
+                  final double fullTextWidth = _measureTextWidth(
+                    clean,
+                    textStyle,
+                  ).clamp(0.0, innerFieldWidth);
+                  final double textStartX = textAlign == TextAlign.center
+                      ? math.max(0.0, (innerFieldWidth - fullTextWidth) / 2.0)
+                      : 0.0;
+                  final double beforeCursorWidth = _measureTextWidth(
                     textBeforeCursor,
                     textStyle,
-                  ).clamp(0.0, maxFieldTextWidth);
+                  );
+                  final double cursorX = (textStartX + beforeCursorWidth)
+                      .clamp(0.0, innerFieldWidth);
 
                   return Positioned(
-                    left: (cursorX - 5.0).clamp(-5.0, maxFieldTextWidth - 5.0),
+                    left: (cursorX - 5.0).clamp(-5.0, innerFieldWidth - 5.0),
                     bottom: height * 0.04,
                     child: IgnorePointer(
                       child: Column(
@@ -2540,27 +3191,25 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       _getCurrentRowLayoutMetrics() {
     final String activeTemplate = _activeTemplateId;
     final bool isNote4x = activeTemplate == Note4x.templateId;
-    final bool isObservationBlank =
-        activeTemplate == BlankObservationTemplate.templateId;
     final bool isPrimaryEval = _isPrimaryEvalTemplate;
     final double screenWidth = MediaQuery.sizeOf(context).width;
     final double paperWidth = isPrimaryEval
         ? PrimarySchoolEvaluationTemplate.getResponsivePaperWidth(screenWidth)
-        : (isObservationBlank
-            ? BlankObservationTemplate.getResponsivePaperWidth(screenWidth)
-            : (isNote4x
-                ? Note4x.getResponsivePaperWidth(screenWidth)
-                : Note5x.getResponsivePaperWidth(screenWidth)));
-    final double rowHeight = (isPrimaryEval || isObservationBlank)
-        ? BlankObservationTemplate.getResponsiveRowHeight(
+        : (isNote4x
+            ? Note4x.getResponsivePaperWidth(screenWidth)
+            : Note5x.getResponsivePaperWidth(screenWidth));
+    final double rowHeight = isPrimaryEval
+        ? PrimarySchoolEvaluationTemplate.getResponsiveRowHeight(
             context,
             maxWidth: paperWidth,
           )
         : (isNote4x
             ? Note4x.getResponsiveRowHeight(context, maxWidth: paperWidth)
             : Note5x.getResponsiveRowHeight(context, maxWidth: paperWidth));
-    final double horizontalPadding = (isPrimaryEval || isObservationBlank)
-        ? BlankObservationTemplate.getResponsiveHorizontalPadding(paperWidth)
+    final double horizontalPadding = isPrimaryEval
+        ? PrimarySchoolEvaluationTemplate.getResponsiveHorizontalPadding(
+            paperWidth,
+          )
         : (isNote4x
             ? Note4x.getResponsiveHorizontalPadding(paperWidth)
             : Note5x.getResponsiveHorizontalPadding(paperWidth));
@@ -2599,9 +3248,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         (Theme.of(context).textTheme.bodyMedium ?? const TextStyle()).copyWith(
       color: isPrimaryEval
           ? AppColors.primaryBlue
-          : (isObservationBlank
-              ? BlankObservationTemplate.getTextColor()
-              : (isNote4x ? Note4x.getTextColor() : Note5x.getTextColor())),
+          : (isNote4x ? Note4x.getTextColor() : Note5x.getTextColor()),
       fontSize: lineFontSize,
       fontWeight: isPrimaryEval ? FontWeight.w600 : FontWeight.w500,
       height: 1.15,
@@ -2637,13 +3284,20 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     final String beforeCursor = existingClean.substring(0, cursorOffset);
     final String afterCursor = existingClean.substring(cursorOffset);
 
-    // Không chèn khoảng trắng trước dấu câu (, . ? ! : ; ) ])
+    // Không chèn khoảng trắng trước dấu câu (, . ? ! : ; ) ]) hoặc trong ô nhập Điểm / Ngày / Tháng / Năm
     const String punctuationChars = ',.?!:;)]}';
     final bool isPunctuation =
         trimmed.length == 1 && punctuationChars.contains(trimmed);
+    final bool isNumericOrDateField = _isPrimaryEvalTemplate &&
+        (PrimarySchoolEvaluationTemplate.isScoreRow(rowIndex) ||
+            (rowIndex >= PrimarySchoolEvaluationTemplate.rowSignDay &&
+                rowIndex <= PrimarySchoolEvaluationTemplate.rowSignYear));
 
     final String insertedPart;
-    if (beforeCursor.isEmpty || beforeCursor.endsWith(' ') || isPunctuation) {
+    if (beforeCursor.isEmpty ||
+        beforeCursor.endsWith(' ') ||
+        isPunctuation ||
+        isNumericOrDateField) {
       insertedPart = trimmed;
     } else if (insertLeadingSpace) {
       insertedPart = ' $trimmed';
@@ -3041,6 +3695,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   }
 
   /// Ô trạng thái nằm kế bên nút Lưu:
+  /// - Khi đang xuất file PDF/Word: Hiển thị "Đang xuất file..."
   /// - Khi ở chế độ Chỉ xem: Hiển thị "Chế độ chỉ xem" (tạm ngưng tự động lưu để tiết kiệm API)
   /// - Bình thường (Bàn phím / Viết bút): Nền màu xanh ("Đang tự động lưu")
   /// - Khi lỗi RAM: Đổi sang nền màu đỏ ("Có lỗi bộ nhớ")
@@ -3055,7 +3710,9 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
             : const Color(0xFF2E7D32)); // Màu xanh báo đang tự động lưu
     final String statusText = hasRamError
         ? 'Có lỗi bộ nhớ'
-        : (_isViewOnlyMode ? 'Chế độ chỉ xem' : 'Đang tự động lưu');
+        : (_isExportingFile
+            ? 'Đang xuất file...'
+            : (_isViewOnlyMode ? 'Chế độ chỉ xem' : 'Đang tự động lưu'));
     final IconData statusIcon = hasRamError
         ? Icons.error_outline_rounded
         : (_isViewOnlyMode
@@ -3074,11 +3731,21 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            statusIcon,
-            color: AppColors.basicWhite,
-            size: 16,
-          ),
+          if (_isExportingFile)
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: AppColors.basicWhite,
+              ),
+            )
+          else
+            Icon(
+              statusIcon,
+              color: AppColors.basicWhite,
+              size: 16,
+            ),
           const SizedBox(width: 6),
           Text(
             statusText,
@@ -3093,7 +3760,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     );
   }
 
-  /// Nút Menu 3 gạch nằm sát góc phải Header (Gom 3 chức năng: "Chỉ xem", "Bàn phím" và "Viết bút")
+  /// Nút Menu 3 gạch nằm sát góc phải Header (Gom các nút: "Chỉ xem", "Bàn phím", "Viết bút", "Xuất file" và "Làm mới")
   Widget _buildInputModeMenuButton({
     required bool hasRamError,
     required double fontSize,
@@ -3101,8 +3768,8 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     final double menuTextSize = AppTheme.getResponsiveFontSize(context, 14);
 
     return PopupMenuButton<NoteInputMode>(
-      enabled: !hasRamError,
-      tooltip: 'Chọn chế độ',
+      enabled: !hasRamError && !_isExportingFile,
+      tooltip: 'Menu chế độ & tác vụ',
       offset: const Offset(0, 44),
       color: AppColors.basicWhite,
       shape: RoundedRectangleBorder(
@@ -3112,8 +3779,16 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         ),
       ),
       onSelected: (NoteInputMode selectedMode) {
+        if (selectedMode == NoteInputMode.exportFile) {
+          _showExportFileDialog();
+          return;
+        }
         if (selectedMode == NoteInputMode.refresh) {
           _handleRefreshNoteFromDrive();
+          return;
+        }
+        if (selectedMode == NoteInputMode.clearContent) {
+          _showClearContentConfirmDialog();
           return;
         }
         if (selectedMode == NoteInputMode.viewOnly) {
@@ -3274,7 +3949,41 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
           ),
         ),
         const PopupMenuDivider(height: 8),
-        // Tùy chọn 4: Làm mới (Tải lại dữ liệu mới nhất từ Google Drive giống ngoài màn hình Home)
+        // Tùy chọn 4: Xuất file (Xuất PDF .pdf hoặc Word .doc vào thư mục Export File trên Google Drive)
+        PopupMenuItem<NoteInputMode>(
+          value: NoteInputMode.exportFile,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppColors.creamBackground,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: AppColors.primaryBlue.withValues(alpha: 0.25),
+              ),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.ios_share_rounded,
+                  color: AppColors.primaryBlue,
+                  size: 20,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Xuất file',
+                    style: TextStyle(
+                      color: AppColors.primaryBlue,
+                      fontSize: menuTextSize,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        // Tùy chọn 5: Làm mới (Tải lại dữ liệu mới nhất từ Google Drive giống ngoài màn hình Home)
         PopupMenuItem<NoteInputMode>(
           value: NoteInputMode.refresh,
           child: Container(
@@ -3299,6 +4008,37 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                     'Làm mới',
                     style: TextStyle(
                       color: AppColors.primaryBlue,
+                      fontSize: menuTextSize,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        // Tùy chọn 6: Làm sạch (Nằm dưới nút Làm mới, nền màu đỏ AppColors.dangerRed, có xác nhận & Hoàn tác)
+        PopupMenuItem<NoteInputMode>(
+          value: NoteInputMode.clearContent,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppColors.dangerRed,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.cleaning_services_rounded,
+                  color: AppColors.basicWhite,
+                  size: 20,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Làm sạch',
+                    style: TextStyle(
+                      color: AppColors.basicWhite,
                       fontSize: menuTextSize,
                       fontWeight: FontWeight.w700,
                     ),

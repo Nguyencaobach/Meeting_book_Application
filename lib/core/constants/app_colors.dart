@@ -27,6 +27,9 @@ class AppColors {
   static const Color textPrimary = basicBlack;
   static const Color textSecondary = Color(0xFF5A6282);
 
+  // Màu đỏ cảnh báo / xóa / làm sạch dùng chung trong Theme
+  static const Color dangerRed = Color(0xFFE53935);
+
   // Màu phục vụ trang giấy ô ly sau này
-  static const Color paperMarginRed = Color(0xFFE53935);
+  static const Color paperMarginRed = dangerRed;
 }

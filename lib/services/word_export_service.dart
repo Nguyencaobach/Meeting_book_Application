@@ -1,0 +1,493 @@
+import 'dart:convert';
+import 'dart:math' as math;
+import 'dart:typed_data';
+import '../core/constants/note_templates/note4x.dart';
+import '../core/constants/observation_templates/primary_school_evaluation_template.dart';
+import '../data/models/line_model.dart';
+import '../data/models/notebook_model.dart';
+
+// ===========================================================================
+// DỊCH VỤ KẾT XUẤT FILE WORD (.DOC) TRỰC TIẾP TRÊN RAM (WORD EXPORT SERVICE)
+// Công dụng:
+// - Chuyển đổi dữ liệu của tệp đang mở (NotebookModel) thành mảng byte Word (.doc)
+//   trực tiếp trên bộ nhớ RAM (không lưu file tạm xuống ổ cứng máy).
+// - Sử dụng chuẩn WordML/HTML A4 (Print View) tương thích 100% với cả
+//   Microsoft Word lẫn Google Docs trên Google Drive.
+// - Giữ nguyên 100% định dạng gốc cho:
+//   1. Biểu mẫu 3 trang "Phiếu đánh giá tiết dạy giáo viên cấp Tiểu học"
+//      (Quốc hiệu, Bảng 3 cột 28 dòng nét đứt, Nhận xét chung, Bảng 12 tiêu chí
+//       có gộp ô dọc rowspan="4", Tiêu chí colspan="2", Tổng điểm colspan="3",
+//       Xếp loại và Chữ ký).
+//   2. Vở ghi chú 5 ô ly (note5x) và 4 ô ly (note4x) với các dòng kẻ ngang.
+// ===========================================================================
+class WordExportService {
+  WordExportService._();
+
+  /// Hàm chính: Tạo dữ liệu byte Word (.doc) trên RAM từ `NotebookModel`
+  static Uint8List generateWordBytes({
+    required NotebookModel notebook,
+    required int tabIndex,
+  }) {
+    final Map<int, String> rowMap = _extractRowTextMap(notebook);
+    final bool isObservationForm = tabIndex == 1 ||
+        PrimarySchoolEvaluationTemplate.isObservationTemplate(
+          notebook.paperTemplate,
+        );
+
+    final String htmlContent = isObservationForm
+        ? _buildPrimarySchoolEvaluationWordHtml(
+            title: notebook.title,
+            rowMap: rowMap,
+          )
+        : _buildNoteRuledWordHtml(
+            notebook: notebook,
+            rowMap: rowMap,
+          );
+
+    // Đính kèm UTF-8 BOM (\uFEFF) để Microsoft Word & Google Docs nhận diện chuẩn tiếng Việt
+    final List<int> utf8Bytes = utf8.encode('\uFEFF$htmlContent');
+    return Uint8List.fromList(utf8Bytes);
+  }
+
+  /// Trích xuất Map (rowIndex -> text) từ trang đầu tiên của NotebookModel
+  static Map<int, String> _extractRowTextMap(NotebookModel notebook) {
+    final Map<int, String> map = <int, String>{};
+    if (notebook.pages.isEmpty) return map;
+    for (final LineModel line in notebook.pages.first.lines) {
+      map[line.rowIndex] = line.text.replaceAll('\u200B', '').trimRight();
+    }
+    return map;
+  }
+
+  /// Mã hóa ký tự đặc biệt HTML để tránh vỡ cấu trúc bảng Word
+  static String _escapeHtml(String input) {
+    return const HtmlEscape().convert(input);
+  }
+
+  // ===========================================================================
+  // 1. KẾT XUẤT WORD 3 TRANG "PHIẾU ĐÁNH GIÁ TIẾT DẠY GIÁO VIÊN CẤP TIỂU HỌC"
+  // ===========================================================================
+  static String _buildPrimarySchoolEvaluationWordHtml({
+    required String title,
+    required Map<int, String> rowMap,
+  }) {
+    String getRowText(int rowIndex) => rowMap[rowIndex] ?? '';
+    final scoreEval =
+        PrimarySchoolEvaluationTemplate.evaluateScores(getRowText);
+
+    final String teacherName =
+        _escapeHtml(getRowText(PrimarySchoolEvaluationTemplate.rowTeacherName));
+    final String className =
+        _escapeHtml(getRowText(PrimarySchoolEvaluationTemplate.rowClassName));
+    final String schoolName =
+        _escapeHtml(getRowText(PrimarySchoolEvaluationTemplate.rowSchoolName));
+    final String lessonTitle =
+        _escapeHtml(getRowText(PrimarySchoolEvaluationTemplate.rowLessonTitle));
+    final String subjectName =
+        _escapeHtml(getRowText(PrimarySchoolEvaluationTemplate.rowSubjectName));
+
+    final StringBuffer sb = StringBuffer();
+
+    sb.write('''
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:w="urn:schemas-microsoft-com:office:word"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <title>${_escapeHtml(title)}</title>
+  <!--[if gte mso 9]>
+  <xml>
+    <w:WordDocument>
+      <w:View>Print</w:View>
+      <w:Zoom>100</w:Zoom>
+      <w:DoNotOptimizeForBrowser/>
+    </w:WordDocument>
+  </xml>
+  <![endif]-->
+  <style>
+    @page WordSection1 {
+      size: 21.0cm 29.7cm;
+      margin: 1.5cm 1.5cm 1.5cm 1.8cm;
+      mso-header-margin: 1.0cm;
+      mso-footer-margin: 1.0cm;
+    }
+    div.WordSection1 {
+      page: WordSection1;
+    }
+    body {
+      font-family: "Times New Roman", serif;
+      font-size: 12pt;
+      color: #000000;
+      background-color: #FFFFFF;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+    .header-table td {
+      border: none;
+      vertical-align: top;
+      text-align: center;
+      padding: 2pt 4pt;
+    }
+    .main-title {
+      text-align: center;
+      font-size: 13.5pt;
+      font-weight: bold;
+      margin: 12pt 0 8pt 0;
+    }
+    .info-line {
+      margin: 4pt 0;
+      font-size: 12pt;
+    }
+    .dotted-span {
+      border-bottom: 1pt dotted #333333;
+      display: inline-block;
+      padding: 0 4pt;
+      color: #1A237E;
+      font-weight: bold;
+    }
+    .obs-table {
+      border: 1pt solid #000000;
+      margin-top: 8pt;
+    }
+    .obs-table th {
+      border: 1pt solid #000000;
+      padding: 6pt 4pt;
+      text-align: center;
+      font-weight: normal;
+      font-size: 12pt;
+      background-color: #FFFFFF;
+    }
+    .obs-table td {
+      border-left: 1pt solid #000000;
+      border-right: 1pt solid #000000;
+      border-bottom: 1pt dashed #4A65C6;
+      height: 19pt;
+      padding: 2pt 5pt;
+      vertical-align: bottom;
+      color: #1A237E;
+    }
+    .obs-table tr.last-row td {
+      border-bottom: 1pt solid #000000;
+    }
+    .comment-line {
+      border-bottom: 1pt dotted #333333;
+      height: 19pt;
+      padding: 2pt 4pt;
+      color: #1A237E;
+    }
+    .rubric-table {
+      border: 1pt solid #000000;
+      margin-top: 6pt;
+      font-size: 11.5pt;
+    }
+    .rubric-table th, .rubric-table td {
+      border: 1pt solid #000000;
+      padding: 4pt 5pt;
+      vertical-align: middle;
+    }
+    .page-break {
+      page-break-before: always;
+    }
+  </style>
+</head>
+<body>
+<div class="WordSection1">
+''');
+
+    // -------------------------------------------------------------------------
+    // TRANG 1: QUỐC HIỆU, THÔNG TIN CHUNG & BẢNG GHI CHÉP 3 CỘT
+    // -------------------------------------------------------------------------
+    sb.write('''
+  <table class="header-table" style="border: none; width: 100%;">
+    <tr>
+      <td style="width: 44%; border: none; text-align: center;">
+        <div style="font-weight: bold;">TRƯỜNG TH NGUYỄN BÁ NGỌC</div>
+        <div style="border-bottom: 1pt solid #000000; width: 110pt; margin: 2pt auto 0 auto;"></div>
+      </td>
+      <td style="width: 56%; border: none; text-align: center;">
+        <div style="font-weight: bold;">CỘNG HOÀ XÃ HỘI CHỦ NGHĨA VIỆT NAM</div>
+        <div style="font-weight: bold;">Độc lập – Tự do – Hạnh phúc</div>
+        <div style="border-bottom: 1pt solid #000000; width: 145pt; margin: 2pt auto 0 auto;"></div>
+      </td>
+    </tr>
+  </table>
+
+  <div class="main-title">PHIẾU ĐÁNH GIÁ TIẾT DẠY GIÁO VIÊN CẤP TIỂU HỌC</div>
+
+  <table style="border: none; margin-bottom: 4pt; width: 100%;">
+    <tr>
+      <td style="border: none; width: 50%; padding: 2pt 0;">
+        Họ, tên người dạy: <span class="dotted-span" style="min-width: 120pt;">${teacherName.isEmpty ? '&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;' : teacherName}</span>
+      </td>
+      <td style="border: none; width: 18%; padding: 2pt 0;">
+        Lớp: <span class="dotted-span" style="min-width: 45pt;">${className.isEmpty ? '&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;' : className}</span>
+      </td>
+      <td style="border: none; width: 32%; padding: 2pt 0;">
+        Trường: <span class="dotted-span" style="min-width: 90pt;">${schoolName.isEmpty ? '&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;' : schoolName}</span>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="2" style="border: none; width: 68%; padding: 2pt 0;">
+        Tên bài dạy: <span class="dotted-span" style="min-width: 210pt;">${lessonTitle.isEmpty ? '&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;' : lessonTitle}</span>
+      </td>
+      <td style="border: none; width: 32%; padding: 2pt 0;">
+        Môn: <span class="dotted-span" style="min-width: 95pt;">${subjectName.isEmpty ? '&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;' : subjectName}</span>
+      </td>
+    </tr>
+  </table>
+
+  <table class="obs-table" border="1" cellspacing="0" cellpadding="4" style="border-collapse: collapse; border: 1pt solid #000000; width: 100%;">
+    <tr>
+      <th style="width: 33.33%; border: 1pt solid #000000; text-align: center;">Nội dung hoạt động</th>
+      <th style="width: 33.33%; border: 1pt solid #000000; text-align: center;">Biểu hiện của học sinh</th>
+      <th style="width: 33.34%; border: 1pt solid #000000; text-align: center;">Nguyên nhân - Biện pháp</th>
+    </tr>
+''');
+
+    for (int r = 0;
+        r < PrimarySchoolEvaluationTemplate.activityTableRowCount;
+        r++) {
+      final bool isLast =
+          r == PrimarySchoolEvaluationTemplate.activityTableRowCount - 1;
+      final String c1 = _escapeHtml(
+        getRowText(PrimarySchoolEvaluationTemplate.col1StartRow + r),
+      );
+      final String c2 = _escapeHtml(
+        getRowText(PrimarySchoolEvaluationTemplate.col2StartRow + r),
+      );
+      final String c3 = _escapeHtml(
+        getRowText(PrimarySchoolEvaluationTemplate.col3StartRow + r),
+      );
+      final String bottomBorderCss =
+          isLast ? '1pt solid #000000' : '1pt dashed #4A65C6';
+
+      sb.write('''
+    <tr${isLast ? ' class="last-row"' : ''}>
+      <td style="border-left: 1pt solid #000000; border-right: 1pt solid #000000; border-bottom: $bottomBorderCss;">${c1.isEmpty ? '&nbsp;' : c1}</td>
+      <td style="border-left: 1pt solid #000000; border-right: 1pt solid #000000; border-bottom: $bottomBorderCss;">${c2.isEmpty ? '&nbsp;' : c2}</td>
+      <td style="border-left: 1pt solid #000000; border-right: 1pt solid #000000; border-bottom: $bottomBorderCss;">${c3.isEmpty ? '&nbsp;' : c3}</td>
+    </tr>
+''');
+    }
+
+    sb.write('''
+  </table>
+
+  <br clear="all" style="page-break-before:always" />
+''');
+
+    // -------------------------------------------------------------------------
+    // TRANG 2: NHẬN XÉT CHUNG & BẢNG THANG ĐIỂM 12 TIÊU CHÍ
+    // -------------------------------------------------------------------------
+    sb.write('''
+  <div style="font-weight: bold; margin-bottom: 4pt;">NHẬN XÉT, ĐÁNH GIÁ CHUNG:</div>
+''');
+
+    for (int i = 0;
+        i < PrimarySchoolEvaluationTemplate.generalCommentLineCount;
+        i++) {
+      final String cmt = _escapeHtml(
+        getRowText(PrimarySchoolEvaluationTemplate.generalCommentStartRow + i),
+      );
+      sb.write(
+        '  <div class="comment-line">${cmt.isEmpty ? '&nbsp;' : cmt}</div>\n',
+      );
+    }
+
+    sb.write('''
+  <div style="font-weight: bold; margin-top: 14pt; margin-bottom: 6pt;">
+    GỢI Ý THANG ĐIỂM, TIÊU CHUẨN, TIÊU CHÍ ĐÁNH GIÁ TIẾT DẠY:
+  </div>
+
+  <table class="rubric-table" border="1" cellspacing="0" cellpadding="4" style="border-collapse: collapse; border: 1pt solid #000000; width: 100%;">
+    <tr>
+      <th style="width: 18%; border: 1pt solid #000000; text-align: center; font-weight: bold;">Nội dung<br/>(Tiêu chuẩn)</th>
+      <th colspan="2" style="width: 58%; border: 1pt solid #000000; text-align: center; font-weight: bold;">Tiêu chí</th>
+      <th style="width: 12%; border: 1pt solid #000000; text-align: center; font-weight: bold;">Điểm<br/>tối đa</th>
+      <th style="width: 12%; border: 1pt solid #000000; text-align: center; font-weight: bold;">Điểm<br/>đánh giá</th>
+    </tr>
+''');
+
+    for (int groupIdx = 1; groupIdx <= 3; groupIdx++) {
+      final List<ObservationCriterionSpec> groupSpecs =
+          PrimarySchoolEvaluationTemplate.criteriaList
+              .where((c) => c.groupIndex == groupIdx)
+              .toList();
+
+      for (int i = 0; i < groupSpecs.length; i++) {
+        final ObservationCriterionSpec spec = groupSpecs[i];
+        final String scoreVal =
+            _escapeHtml(getRowText(spec.scoreRowIndex));
+        final String groupTitleHtml =
+            _escapeHtml(spec.groupTitle).replaceAll('\n', '<br/>');
+
+        sb.write('    <tr>\n');
+        if (i == 0) {
+          sb.write(
+            '      <td rowspan="${groupSpecs.length}" style="width: 18%; border: 1pt solid #000000; text-align: center; font-weight: bold; vertical-align: middle;">$groupTitleHtml</td>\n',
+          );
+        }
+        sb.write('''
+      <td style="width: 7%; border: 1pt solid #000000; text-align: center; vertical-align: middle;">${_escapeHtml(spec.code)}</td>
+      <td style="width: 51%; border: 1pt solid #000000; text-align: left; vertical-align: middle;">${_escapeHtml(spec.description)}</td>
+      <td style="width: 12%; border: 1pt solid #000000; text-align: center; vertical-align: middle;">${spec.maxScoreLabel}</td>
+      <td style="width: 12%; border: 1pt solid #000000; text-align: center; font-weight: bold; color: #1A237E; vertical-align: middle;">${scoreVal.isEmpty ? '&nbsp;' : scoreVal}</td>
+    </tr>
+''');
+      }
+    }
+
+    final String totalScoreText = scoreEval.enteredCount > 0
+        ? PrimarySchoolEvaluationTemplate.formatScoreVi(scoreEval.totalScore)
+        : '&nbsp;';
+
+    sb.write('''
+    <tr>
+      <td colspan="3" style="border: 1pt solid #000000; text-align: center; font-weight: bold;">Tổng điểm</td>
+      <td style="border: 1pt solid #000000; text-align: center;">20,0</td>
+      <td style="border: 1pt solid #000000; text-align: center; font-weight: bold; color: #1A237E;">$totalScoreText</td>
+    </tr>
+  </table>
+
+  <br clear="all" style="page-break-before:always" />
+''');
+
+    // -------------------------------------------------------------------------
+    // TRANG 3: QUY ĐỊNH ĐIỂM ĐÁNH GIÁ, XẾP LOẠI & CHỮ KÝ NGƯỜI DỰ GIỜ
+    // -------------------------------------------------------------------------
+    final String rawRating =
+        getRowText(PrimarySchoolEvaluationTemplate.rowEvaluatedRating);
+    final String ratingText = _escapeHtml(
+      rawRating.isNotEmpty ? rawRating : (scoreEval.suggestedRating ?? ''),
+    );
+    final String signDay =
+        _escapeHtml(getRowText(PrimarySchoolEvaluationTemplate.rowSignDay));
+    final String signMonth =
+        _escapeHtml(getRowText(PrimarySchoolEvaluationTemplate.rowSignMonth));
+    final String signYear =
+        _escapeHtml(getRowText(PrimarySchoolEvaluationTemplate.rowSignYear));
+    final String observerName = _escapeHtml(
+      getRowText(PrimarySchoolEvaluationTemplate.rowObserverName),
+    );
+
+    sb.write('''
+  <div style="font-weight: bold; margin-bottom: 8pt;">ĐIỂM ĐÁNH GIÁ TIẾT DẠY</div>
+  <p style="margin: 5pt 0;">
+    1. <b>Loại Giỏi:</b> Tổng điểm từ 18,0 đến 20,0 điểm. Trong đó Tiêu chí 2.1 đến 3.4 đạt từ 1,5 điểm trở lên. Các tiêu chí còn lại không có tiêu chí nào dưới 1/2 điểm tối đa.
+  </p>
+  <p style="margin: 5pt 0;">
+    2. <b>Loại Khá:</b> Tổng điểm từ 13,5 đến dưới 18,0 điểm. Trong đó Tiêu chí 2.1 đến 3.4 đạt từ 1,5 điểm trở lên. Các tiêu chí còn lại không có tiêu chí nào dưới 1/2 điểm tối đa.
+  </p>
+  <p style="margin: 5pt 0;">
+    3. <b>Loại Trung bình:</b> Tổng điểm từ 10,0 đến dưới 13,5 điểm.
+  </p>
+  <p style="margin: 5pt 0;">
+    4. <b>Loại Chưa đạt:</b> Tổng điểm dưới 10,0 điểm hoặc có bất cứ tiêu chí nào 0 điểm.
+  </p>
+
+  <div style="font-weight: bold; margin-top: 10pt; margin-bottom: 6pt; padding-left: 14pt;">V. ĐÁNH GIÁ TIẾT DẠY:</div>
+  <div style="margin-bottom: 20pt; padding-left: 95pt;">
+    Tiết dạy đạt loại: <span class="dotted-span" style="min-width: 180pt;">${ratingText.isEmpty ? '&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;' : ratingText}</span>
+  </div>
+
+  <table style="border: none; width: 100%;">
+    <tr>
+      <td style="border: none; width: 45%;"></td>
+      <td style="border: none; width: 55%; text-align: center;">
+        <div style="font-style: italic;">
+          Đức Lập, ngày ${signDay.isEmpty ? '...' : signDay} tháng ${signMonth.isEmpty ? '...' : signMonth} năm ${signYear.isEmpty ? '...' : signYear}
+        </div>
+        <div style="margin-top: 4pt;">Người dự giờ</div>
+        <div style="font-style: italic;">(Ký, ghi rõ họ tên)</div>
+        <div style="height: 75pt;"></div>
+        <div style="font-weight: bold;">$observerName</div>
+      </td>
+    </tr>
+  </table>
+</div>
+</body>
+</html>
+''');
+
+    return sb.toString();
+  }
+
+  // ===========================================================================
+  // 2. KẾT XUẤT WORD CHO VỞ GHI CHÚ KẺ NGANG (NOTE5X / NOTE4X)
+  // ===========================================================================
+  static String _buildNoteRuledWordHtml({
+    required NotebookModel notebook,
+    required Map<int, String> rowMap,
+  }) {
+    final bool isNote4x = notebook.paperTemplate == Note4x.templateId;
+    final int highestRow = rowMap.keys.isEmpty
+        ? 0
+        : rowMap.keys.reduce(math.max);
+    final int minRows = isNote4x ? 26 : 24;
+    final int totalRows = math.max(minRows, highestRow + 1);
+
+    final StringBuffer sb = StringBuffer();
+    sb.write('''
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:w="urn:schemas-microsoft-com:office:word"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <title>${_escapeHtml(notebook.title)}</title>
+  <!--[if gte mso 9]>
+  <xml>
+    <w:WordDocument>
+      <w:View>Print</w:View>
+      <w:Zoom>100</w:Zoom>
+      <w:DoNotOptimizeForBrowser/>
+    </w:WordDocument>
+  </xml>
+  <![endif]-->
+  <style>
+    @page WordSection1 {
+      size: 21.0cm 29.7cm;
+      margin: 1.8cm 1.6cm 1.8cm 1.8cm;
+    }
+    div.WordSection1 {
+      page: WordSection1;
+    }
+    body {
+      font-family: "Times New Roman", serif;
+      font-size: 13pt;
+      color: #000000;
+    }
+    .note-title {
+      font-size: 15pt;
+      font-weight: bold;
+      color: #263BAA;
+      margin-bottom: 10pt;
+    }
+    .ruled-line {
+      border-bottom: 1pt solid #263BAA;
+      min-height: 22pt;
+      padding: 4pt 4pt 2pt 4pt;
+    }
+  </style>
+</head>
+<body>
+<div class="WordSection1">
+  <div class="note-title">${_escapeHtml(notebook.title)}</div>
+''');
+
+    for (int r = 0; r < totalRows; r++) {
+      final String text = _escapeHtml(rowMap[r] ?? '');
+      sb.write(
+        '  <div class="ruled-line">${text.isEmpty ? '&nbsp;' : text}</div>\n',
+      );
+    }
+
+    sb.write('''
+</div>
+</body>
+</html>
+''');
+    return sb.toString();
+  }
+}
