@@ -7,6 +7,7 @@ import '../core/constants/note_templates/note4x.dart';
 import '../core/constants/observation_templates/primary_school_evaluation_template.dart';
 import '../data/models/line_model.dart';
 import '../data/models/notebook_model.dart';
+import '../data/models/stroke_point_model.dart';
 
 // ===========================================================================
 // DỊCH VỤ KẾT XUẤT FILE PDF (.PDF) TRỰC TIẾP TRÊN RAM (PDF EXPORT SERVICE)
@@ -92,6 +93,13 @@ class PdfExportService {
     );
 
     final Map<int, String> rowMap = _extractRowTextMap(notebook);
+    final Map<int, List<HandwritingClusterModel>> clusterMap =
+        _extractRowClusterMap(notebook);
+    final List<FreehandPageStrokeModel> freehandStrokes =
+        notebook.pages.isEmpty
+            ? const <FreehandPageStrokeModel>[]
+            : notebook.pages.first.freehandStrokes;
+
     final bool isObservationForm = tabIndex == 1 ||
         PrimarySchoolEvaluationTemplate.isObservationTemplate(
           notebook.paperTemplate,
@@ -101,6 +109,8 @@ class PdfExportService {
       _buildPrimarySchoolEvaluationPdfPages(
         pdf: pdf,
         rowMap: rowMap,
+        clusterMap: clusterMap,
+        freehandStrokes: freehandStrokes,
         regularFont: regularFont,
         mediumFont: mediumFont,
         boldFont: boldFont,
@@ -111,6 +121,7 @@ class PdfExportService {
         pdf: pdf,
         notebook: notebook,
         rowMap: rowMap,
+        freehandStrokes: freehandStrokes,
         regularFont: regularFont,
         mediumFont: mediumFont,
         boldFont: boldFont,
@@ -128,6 +139,115 @@ class PdfExportService {
       map[line.rowIndex] = line.text.replaceAll('\u200B', '').trimRight();
     }
     return map;
+  }
+
+  /// Trích xuất Map (rowIndex -> handwritingClusters) từ trang đầu tiên của NotebookModel
+  static Map<int, List<HandwritingClusterModel>> _extractRowClusterMap(
+    NotebookModel notebook,
+  ) {
+    final Map<int, List<HandwritingClusterModel>> map =
+        <int, List<HandwritingClusterModel>>{};
+    if (notebook.pages.isEmpty) return map;
+    for (final LineModel line in notebook.pages.first.lines) {
+      if (line.handwritingClusters.isNotEmpty) {
+        map[line.rowIndex] = line.handwritingClusters;
+      }
+    }
+    return map;
+  }
+
+  /// Vẽ kết hợp chuỗi chữ đánh máy và các cụm nét chữ viết tay đã chuẩn hóa trên 1 dòng PDF
+  static pw.Widget _buildPdfRowContent({
+    required String text,
+    required List<HandwritingClusterModel> clusters,
+    required pw.TextStyle style,
+    double clusterHeight = 13.5,
+  }) {
+    if (clusters.isEmpty) {
+      return pw.Text(
+        text.isEmpty ? ' ' : text,
+        maxLines: 1,
+        style: style,
+      );
+    }
+
+    final List<pw.Widget> children = <pw.Widget>[];
+    if (text.isNotEmpty) {
+      children.add(
+        pw.Padding(
+          padding: const pw.EdgeInsets.only(right: 3),
+          child: pw.Text(text, maxLines: 1, style: style),
+        ),
+      );
+    }
+
+    for (int i = 0; i < clusters.length; i++) {
+      final HandwritingClusterModel cluster = clusters[i];
+      final double gap = (i > 0 || text.isNotEmpty)
+          ? (cluster.leadingSpace ? clusterHeight * 0.28 : clusterHeight * 0.08)
+          : 0.0;
+      final double width =
+          (clusterHeight * cluster.aspectRatio).clamp(clusterHeight * 0.25, 220.0);
+
+      if (gap > 0) {
+        children.add(pw.SizedBox(width: gap));
+      }
+      children.add(
+        pw.CustomPaint(
+          size: PdfPoint(width, clusterHeight),
+          painter: (PdfGraphics canvas, PdfPoint size) {
+            final PdfColor strokePdfColor = PdfColor.fromInt(cluster.colorValue);
+            final double pdfLineW = ((cluster.strokeWidth / 2.6) * 1.1)
+                .clamp(0.7, 3.2) *
+                (cluster.penStyle == PenStrokeStyle.highlighter ? 2.4 : 1.0);
+            canvas
+              ..saveContext()
+              ..setStrokeColor(strokePdfColor)
+              ..setFillColor(strokePdfColor)
+              ..setLineWidth(pdfLineW)
+              ..setLineCap(PdfLineCap.round)
+              ..setLineJoin(PdfLineJoin.round);
+            if (cluster.penStyle == PenStrokeStyle.dashed) {
+              canvas.setLineDashPattern(<int>[3, 2]);
+            }
+
+            for (final stroke in cluster.strokes) {
+              final List<StrokePointModel> pts = stroke.points;
+              if (pts.isEmpty) continue;
+              if (pts.length == 1) {
+                canvas
+                  ..drawEllipse(
+                    pts.first.nx * size.x,
+                    (1.0 - pts.first.ry) * size.y,
+                    0.75,
+                    0.75,
+                  )
+                  ..fillPath();
+                continue;
+              }
+              canvas.moveTo(
+                pts.first.nx * size.x,
+                (1.0 - pts.first.ry) * size.y,
+              );
+              for (int p = 1; p < pts.length; p++) {
+                canvas.lineTo(
+                  pts[p].nx * size.x,
+                  (1.0 - pts[p].ry) * size.y,
+                );
+              }
+              canvas.strokePath();
+            }
+            canvas.restoreContext();
+          },
+        ),
+      );
+    }
+
+    return pw.Row(
+      mainAxisSize: pw.MainAxisSize.min,
+      crossAxisAlignment: pw.CrossAxisAlignment.end,
+      children: children,
+    );
   }
 
   /// Vẽ các đường kẻ dọc xuyên suốt chiều cao của một khối bằng `CustomPaint`
@@ -155,15 +275,104 @@ class PdfExportService {
   // ===========================================================================
   // 1. KẾT XUẤT PDF 3 TRANG "PHIẾU ĐÁNH GIÁ TIẾT DẠY GIÁO VIÊN CẤP TIỂU HỌC"
   // ===========================================================================
+  static pw.Widget _wrapPdfPageWithFreehandOverlay({
+    required pw.Widget child,
+    required List<FreehandPageStrokeModel> freehandStrokes,
+    required double startRy,
+    required double endRy,
+  }) {
+    if (freehandStrokes.isEmpty) return child;
+    final double spanRy = math.max(1.0, endRy - startRy);
+    return pw.Stack(
+      children: [
+        child,
+        pw.Positioned.fill(
+          child: pw.CustomPaint(
+            painter: (PdfGraphics canvas, PdfPoint size) {
+              for (final stroke in freehandStrokes) {
+                final List<StrokePointModel> pts = stroke.points;
+                if (pts.isEmpty) continue;
+                final bool intersectsPage = pts.any(
+                  (p) => p.ry >= startRy && p.ry <= endRy,
+                );
+                if (!intersectsPage) continue;
+
+                final PdfColor strokePdfColor =
+                    PdfColor.fromInt(stroke.colorValue);
+                final double pdfLineW =
+                    ((stroke.strokeWidth / 2.6) * 1.25).clamp(0.8, 3.8) *
+                        (stroke.penStyle == PenStrokeStyle.highlighter
+                            ? 2.4
+                            : 1.0);
+                canvas
+                  ..saveContext()
+                  ..setStrokeColor(strokePdfColor)
+                  ..setFillColor(strokePdfColor)
+                  ..setLineWidth(pdfLineW)
+                  ..setLineCap(PdfLineCap.round)
+                  ..setLineJoin(PdfLineJoin.round);
+                if (stroke.penStyle == PenStrokeStyle.dashed) {
+                  canvas.setLineDashPattern(<int>[4, 3]);
+                }
+
+                if (pts.length == 1) {
+                  final double x = pts.first.nx * size.x;
+                  final double y =
+                      size.y * (1.0 - ((pts.first.ry - startRy) / spanRy));
+                  if (y >= 0 && y <= size.y) {
+                    canvas
+                      ..drawEllipse(x, y, 0.85, 0.85)
+                      ..fillPath();
+                  }
+                  canvas.restoreContext();
+                  continue;
+                }
+
+                bool pathStarted = false;
+                for (int i = 0; i < pts.length; i++) {
+                  final double x = pts[i].nx * size.x;
+                  final double y =
+                      size.y * (1.0 - ((pts[i].ry - startRy) / spanRy));
+                  if (y < -4.0 || y > size.y + 4.0) {
+                    if (pathStarted) {
+                      canvas.strokePath();
+                      pathStarted = false;
+                    }
+                    continue;
+                  }
+                  final double clampedY = y.clamp(0.0, size.y);
+                  if (!pathStarted) {
+                    canvas.moveTo(x, clampedY);
+                    pathStarted = true;
+                  } else {
+                    canvas.lineTo(x, clampedY);
+                  }
+                }
+                if (pathStarted) {
+                  canvas.strokePath();
+                }
+                canvas.restoreContext();
+              }
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
   static void _buildPrimarySchoolEvaluationPdfPages({
     required pw.Document pdf,
     required Map<int, String> rowMap,
+    required Map<int, List<HandwritingClusterModel>> clusterMap,
+    required List<FreehandPageStrokeModel> freehandStrokes,
     required pw.Font regularFont,
     required pw.Font mediumFont,
     required pw.Font boldFont,
     required pw.Font italicFont,
   }) {
     String getRowText(int rowIndex) => rowMap[rowIndex] ?? '';
+    List<HandwritingClusterModel> getRowClusters(int rowIndex) =>
+        clusterMap[rowIndex] ?? const <HandwritingClusterModel>[];
 
     final scoreEval =
         PrimarySchoolEvaluationTemplate.evaluateScores(getRowText);
@@ -207,9 +416,13 @@ class PdfExportService {
           pageVerticalMargin,
         ),
         build: (pw.Context context) {
-          return pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-            children: [
+          return _wrapPdfPageWithFreehandOverlay(
+            freehandStrokes: freehandStrokes,
+            startRy: 0.0,
+            endRy: 36.0,
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+              children: [
               // Quốc hiệu & Tiêu đề trường (2 cột in đậm như biểu mẫu gốc)
               pw.Row(
                 crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -279,6 +492,9 @@ class PdfExportService {
                       value: getRowText(
                         PrimarySchoolEvaluationTemplate.rowTeacherName,
                       ),
+                      clusters: getRowClusters(
+                        PrimarySchoolEvaluationTemplate.rowTeacherName,
+                      ),
                       baseStyle: baseStyle,
                       inputStyle: inputStyle,
                     ),
@@ -291,6 +507,9 @@ class PdfExportService {
                       value: getRowText(
                         PrimarySchoolEvaluationTemplate.rowClassName,
                       ),
+                      clusters: getRowClusters(
+                        PrimarySchoolEvaluationTemplate.rowClassName,
+                      ),
                       baseStyle: baseStyle,
                       inputStyle: inputStyle,
                     ),
@@ -301,6 +520,9 @@ class PdfExportService {
                     child: _buildPdfDottedInfoField(
                       label: 'Trường: ',
                       value: getRowText(
+                        PrimarySchoolEvaluationTemplate.rowSchoolName,
+                      ),
+                      clusters: getRowClusters(
                         PrimarySchoolEvaluationTemplate.rowSchoolName,
                       ),
                       baseStyle: baseStyle,
@@ -321,6 +543,9 @@ class PdfExportService {
                       value: getRowText(
                         PrimarySchoolEvaluationTemplate.rowLessonTitle,
                       ),
+                      clusters: getRowClusters(
+                        PrimarySchoolEvaluationTemplate.rowLessonTitle,
+                      ),
                       baseStyle: baseStyle,
                       inputStyle: inputStyle,
                     ),
@@ -331,6 +556,9 @@ class PdfExportService {
                     child: _buildPdfDottedInfoField(
                       label: 'Môn: ',
                       value: getRowText(
+                        PrimarySchoolEvaluationTemplate.rowSubjectName,
+                      ),
+                      clusters: getRowClusters(
                         PrimarySchoolEvaluationTemplate.rowSubjectName,
                       ),
                       baseStyle: baseStyle,
@@ -433,18 +661,15 @@ class PdfExportService {
                                     PrimarySchoolEvaluationTemplate
                                             .activityTableRowCount -
                                         1;
-                                final String c1 = getRowText(
-                                  PrimarySchoolEvaluationTemplate.col1StartRow +
-                                      r,
-                                );
-                                final String c2 = getRowText(
-                                  PrimarySchoolEvaluationTemplate.col2StartRow +
-                                      r,
-                                );
-                                final String c3 = getRowText(
-                                  PrimarySchoolEvaluationTemplate.col3StartRow +
-                                      r,
-                                );
+                                final int r1 =
+                                    PrimarySchoolEvaluationTemplate.col1StartRow +
+                                        r;
+                                final int r2 =
+                                    PrimarySchoolEvaluationTemplate.col2StartRow +
+                                        r;
+                                final int r3 =
+                                    PrimarySchoolEvaluationTemplate.col3StartRow +
+                                        r;
 
                                 final pw.BorderSide bottomDash = isLast
                                     ? pw.BorderSide.none
@@ -473,12 +698,13 @@ class PdfExportService {
                                             vertical: 2,
                                           ),
                                           alignment: pw.Alignment.bottomLeft,
-                                          child: pw.Text(
-                                            c1,
-                                            maxLines: 1,
+                                          child: _buildPdfRowContent(
+                                            text: getRowText(r1),
+                                            clusters: getRowClusters(r1),
                                             style: inputStyle.copyWith(
                                               fontSize: 9.6,
                                             ),
+                                            clusterHeight: 14.0,
                                           ),
                                         ),
                                       ),
@@ -490,12 +716,13 @@ class PdfExportService {
                                             vertical: 2,
                                           ),
                                           alignment: pw.Alignment.bottomLeft,
-                                          child: pw.Text(
-                                            c2,
-                                            maxLines: 1,
+                                          child: _buildPdfRowContent(
+                                            text: getRowText(r2),
+                                            clusters: getRowClusters(r2),
                                             style: inputStyle.copyWith(
                                               fontSize: 9.6,
                                             ),
+                                            clusterHeight: 14.0,
                                           ),
                                         ),
                                       ),
@@ -507,12 +734,13 @@ class PdfExportService {
                                             vertical: 2,
                                           ),
                                           alignment: pw.Alignment.bottomLeft,
-                                          child: pw.Text(
-                                            c3,
-                                            maxLines: 1,
+                                          child: _buildPdfRowContent(
+                                            text: getRowText(r3),
+                                            clusters: getRowClusters(r3),
                                             style: inputStyle.copyWith(
                                               fontSize: 9.6,
                                             ),
+                                            clusterHeight: 14.0,
                                           ),
                                         ),
                                       ),
@@ -529,6 +757,7 @@ class PdfExportService {
                 ),
               ),
             ],
+            ),
           );
         },
       ),
@@ -569,18 +798,21 @@ class PdfExportService {
             lineSpacing: 1.2,
           );
 
-          return pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-            children: [
+          return _wrapPdfPageWithFreehandOverlay(
+            freehandStrokes: freehandStrokes,
+            startRy: 36.0,
+            endRy: 72.0,
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+              children: [
               pw.Text('NHẬN XÉT, ĐÁNH GIÁ CHUNG:', style: boldStyle),
               pw.SizedBox(height: 3),
               ...List<pw.Widget>.generate(
                 PrimarySchoolEvaluationTemplate.generalCommentLineCount,
                 (int idx) {
-                  final String commentLine = getRowText(
-                    PrimarySchoolEvaluationTemplate.generalCommentStartRow +
-                        idx,
-                  );
+                  final int commentRow =
+                      PrimarySchoolEvaluationTemplate.generalCommentStartRow +
+                          idx;
                   return pw.Container(
                     height: 18.5,
                     alignment: pw.Alignment.bottomLeft,
@@ -594,7 +826,12 @@ class PdfExportService {
                         ),
                       ),
                     ),
-                    child: pw.Text(commentLine, style: inputStyle),
+                    child: _buildPdfRowContent(
+                      text: getRowText(commentRow),
+                      clusters: getRowClusters(commentRow),
+                      style: inputStyle,
+                      clusterHeight: 13.5,
+                    ),
                   );
                 },
               ),
@@ -711,6 +948,7 @@ class PdfExportService {
                           _buildPdfCriterionGroup(
                             specs: group1,
                             getRowText: getRowText,
+                            getRowClusters: getRowClusters,
                             tblText: tblText,
                             tblBold: tblBold,
                             inputStyle: inputStyle,
@@ -718,6 +956,7 @@ class PdfExportService {
                           _buildPdfCriterionGroup(
                             specs: group2,
                             getRowText: getRowText,
+                            getRowClusters: getRowClusters,
                             tblText: tblText,
                             tblBold: tblBold,
                             inputStyle: inputStyle,
@@ -725,6 +964,7 @@ class PdfExportService {
                           _buildPdfCriterionGroup(
                             specs: group3,
                             getRowText: getRowText,
+                            getRowClusters: getRowClusters,
                             tblText: tblText,
                             tblBold: tblBold,
                             inputStyle: inputStyle,
@@ -803,6 +1043,7 @@ class PdfExportService {
                 ),
               ),
             ],
+            ),
           );
         },
       ),
@@ -829,9 +1070,13 @@ class PdfExportService {
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.fromLTRB(38, 36, 38, 36),
         build: (pw.Context context) {
-          return pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-            children: [
+          return _wrapPdfPageWithFreehandOverlay(
+            freehandStrokes: freehandStrokes,
+            startRy: 72.0,
+            endRy: 108.0,
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+              children: [
               pw.Text('ĐIỂM ĐÁNH GIÁ TIẾT DẠY', style: boldStyle),
               pw.SizedBox(height: 8),
               _buildPdfRatingRule(
@@ -875,6 +1120,9 @@ class PdfExportService {
                 child: _buildPdfDottedInfoField(
                   label: 'Tiết dạy đạt loại: ',
                   value: ratingText,
+                  clusters: getRowClusters(
+                    PrimarySchoolEvaluationTemplate.rowEvaluatedRating,
+                  ),
                   baseStyle: baseStyle,
                   inputStyle: boldStyle.copyWith(
                     color: PdfColor.fromInt(0xFF1A237E),
@@ -889,10 +1137,55 @@ class PdfExportService {
                   child: pw.Column(
                     crossAxisAlignment: pw.CrossAxisAlignment.center,
                     children: [
-                      pw.Text(
-                        'Đức Lập, ngày ${signDay.isEmpty ? "..." : signDay} tháng ${signMonth.isEmpty ? "..." : signMonth} năm ${signYear.isEmpty ? "......" : signYear}',
-                        textAlign: pw.TextAlign.center,
-                        style: italicStyle,
+                      pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.center,
+                        mainAxisSize: pw.MainAxisSize.min,
+                        children: [
+                          pw.Text('Đức Lập, ngày ', style: italicStyle),
+                          _buildPdfRowContent(
+                            text: signDay.isEmpty &&
+                                    getRowClusters(
+                                      PrimarySchoolEvaluationTemplate.rowSignDay,
+                                    ).isEmpty
+                                ? '...'
+                                : signDay,
+                            clusters: getRowClusters(
+                              PrimarySchoolEvaluationTemplate.rowSignDay,
+                            ),
+                            style: italicStyle,
+                            clusterHeight: 12.0,
+                          ),
+                          pw.Text(' tháng ', style: italicStyle),
+                          _buildPdfRowContent(
+                            text: signMonth.isEmpty &&
+                                    getRowClusters(
+                                      PrimarySchoolEvaluationTemplate
+                                          .rowSignMonth,
+                                    ).isEmpty
+                                ? '...'
+                                : signMonth,
+                            clusters: getRowClusters(
+                              PrimarySchoolEvaluationTemplate.rowSignMonth,
+                            ),
+                            style: italicStyle,
+                            clusterHeight: 12.0,
+                          ),
+                          pw.Text(' năm ', style: italicStyle),
+                          _buildPdfRowContent(
+                            text: signYear.isEmpty &&
+                                    getRowClusters(
+                                      PrimarySchoolEvaluationTemplate
+                                          .rowSignYear,
+                                    ).isEmpty
+                                ? '......'
+                                : signYear,
+                            clusters: getRowClusters(
+                              PrimarySchoolEvaluationTemplate.rowSignYear,
+                            ),
+                            style: italicStyle,
+                            clusterHeight: 12.0,
+                          ),
+                        ],
                       ),
                       pw.SizedBox(height: 6),
                       pw.Text(
@@ -907,17 +1200,24 @@ class PdfExportService {
                         style: italicStyle,
                       ),
                       pw.SizedBox(height: 72),
-                      if (observerName.isNotEmpty)
-                        pw.Text(
-                          observerName,
-                          textAlign: pw.TextAlign.center,
+                      if (observerName.isNotEmpty ||
+                          getRowClusters(
+                            PrimarySchoolEvaluationTemplate.rowObserverName,
+                          ).isNotEmpty)
+                        _buildPdfRowContent(
+                          text: observerName,
+                          clusters: getRowClusters(
+                            PrimarySchoolEvaluationTemplate.rowObserverName,
+                          ),
                           style: boldStyle,
+                          clusterHeight: 15.0,
                         ),
                     ],
                   ),
                 ),
               ),
             ],
+            ),
           );
         },
       ),
@@ -931,6 +1231,7 @@ class PdfExportService {
   static pw.Widget _buildPdfCriterionGroup({
     required List<ObservationCriterionSpec> specs,
     required String Function(int) getRowText,
+    required List<HandwritingClusterModel> Function(int) getRowClusters,
     required pw.TextStyle tblText,
     required pw.TextStyle tblBold,
     required pw.TextStyle inputStyle,
@@ -976,6 +1277,8 @@ class PdfExportService {
                   final ObservationCriterionSpec spec = specs[idx];
                   final bool isLast = idx == specs.length - 1;
                   final String scoreVal = getRowText(spec.scoreRowIndex);
+                  final List<HandwritingClusterModel> scoreClusters =
+                      getRowClusters(spec.scoreRowIndex);
 
                   return pw.Container(
                     decoration: pw.BoxDecoration(
@@ -1043,13 +1346,14 @@ class PdfExportService {
                               vertical: 3.8,
                             ),
                             alignment: pw.Alignment.center,
-                            child: pw.Text(
-                              scoreVal.isEmpty ? ' ' : scoreVal,
-                              textAlign: pw.TextAlign.center,
+                            child: _buildPdfRowContent(
+                              text: scoreVal,
+                              clusters: scoreClusters,
                               style: inputStyle.copyWith(
                                 fontSize: 9.2,
                                 fontWeight: pw.FontWeight.bold,
                               ),
+                              clusterHeight: 12.0,
                             ),
                           ),
                         ),
@@ -1069,6 +1373,7 @@ class PdfExportService {
   static pw.Widget _buildPdfDottedInfoField({
     required String label,
     required String value,
+    List<HandwritingClusterModel> clusters = const <HandwritingClusterModel>[],
     required pw.TextStyle baseStyle,
     required pw.TextStyle inputStyle,
   }) {
@@ -1088,10 +1393,11 @@ class PdfExportService {
                 ),
               ),
             ),
-            child: pw.Text(
-              value.isEmpty ? ' ' : value,
-              maxLines: 1,
+            child: _buildPdfRowContent(
+              text: value,
+              clusters: clusters,
               style: inputStyle,
+              clusterHeight: 13.5,
             ),
           ),
         ),
@@ -1117,23 +1423,31 @@ class PdfExportService {
   }
 
   // ===========================================================================
-  // 2. KẾT XUẤT PDF TRANG VỞ GHI CHÚ KẺ NGANG (NOTE5X / NOTE4X)
+  // 2. KẾT XUẤT PDF TRANG VỞ GHI CHÚ KẺ NGANG (NOTE5X / NOTE4X) + NÉT VẼ TỰ DO
   // ===========================================================================
   static void _buildNoteRuledPdfPages({
     required pw.Document pdf,
     required NotebookModel notebook,
     required Map<int, String> rowMap,
+    required List<FreehandPageStrokeModel> freehandStrokes,
     required pw.Font regularFont,
     required pw.Font mediumFont,
     required pw.Font boldFont,
   }) {
     final bool isNote4x = notebook.paperTemplate == Note4x.templateId;
-    final int highestRow = rowMap.keys.isEmpty
-        ? 0
-        : rowMap.keys.reduce(math.max);
+    int highestRow = rowMap.keys.isEmpty ? 0 : rowMap.keys.reduce(math.max);
+    for (final stroke in freehandStrokes) {
+      for (final pt in stroke.points) {
+        final int r = pt.ry.ceil();
+        if (r > highestRow) {
+          highestRow = r;
+        }
+      }
+    }
     final int rowsPerPage = isNote4x ? 26 : 24;
     final int totalRows = math.max(rowsPerPage, highestRow + 1);
     final int pageCount = (totalRows / rowsPerPage).ceil();
+    final double pdfRowHeight = isNote4x ? 27.0 : 29.0;
 
     final pw.TextStyle titleStyle = pw.TextStyle(
       font: boldFont,
@@ -1148,6 +1462,7 @@ class PdfExportService {
 
     for (int pageIdx = 0; pageIdx < pageCount; pageIdx++) {
       final int startRow = pageIdx * rowsPerPage;
+      final int endRow = startRow + rowsPerPage;
 
       pdf.addPage(
         pw.Page(
@@ -1161,29 +1476,108 @@ class PdfExportService {
                   pw.Text(notebook.title, style: titleStyle),
                   pw.SizedBox(height: 8),
                 ],
-                ...List<pw.Widget>.generate(rowsPerPage, (int r) {
-                  final int rowIndex = startRow + r;
-                  final String lineText = rowMap[rowIndex] ?? '';
+                pw.Stack(
+                  children: [
+                    pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+                      children: List<pw.Widget>.generate(rowsPerPage, (int r) {
+                        final int rowIndex = startRow + r;
+                        final String lineText = rowMap[rowIndex] ?? '';
 
-                  return pw.Container(
-                    height: isNote4x ? 27.0 : 29.0,
-                    alignment: pw.Alignment.bottomLeft,
-                    padding: const pw.EdgeInsets.only(bottom: 3, left: 4),
-                    decoration: pw.BoxDecoration(
-                      border: pw.Border(
-                        bottom: pw.BorderSide(
-                          color: PdfColor.fromInt(0xFF263BAA),
-                          width: 0.75,
+                        return pw.Container(
+                          height: pdfRowHeight,
+                          alignment: pw.Alignment.bottomLeft,
+                          padding: const pw.EdgeInsets.only(bottom: 3, left: 4),
+                          decoration: pw.BoxDecoration(
+                            border: pw.Border(
+                              bottom: pw.BorderSide(
+                                color: PdfColor.fromInt(0xFF263BAA),
+                                width: 0.75,
+                              ),
+                            ),
+                          ),
+                          child: pw.Text(
+                            lineText,
+                            maxLines: 1,
+                            style: rowTextStyle,
+                          ),
+                        );
+                      }),
+                    ),
+                    if (freehandStrokes.isNotEmpty)
+                      pw.Positioned.fill(
+                        child: pw.CustomPaint(
+                          painter: (PdfGraphics canvas, PdfPoint size) {
+                            for (final stroke in freehandStrokes) {
+                              final List<StrokePointModel> pts = stroke.points;
+                              if (pts.isEmpty) continue;
+                              final bool intersectsPage = pts.any(
+                                (p) => p.ry >= startRow && p.ry <= endRow,
+                              );
+                              if (!intersectsPage) continue;
+
+                              final PdfColor strokePdfColor =
+                                  PdfColor.fromInt(stroke.colorValue);
+                              final double pdfLineW =
+                                  ((stroke.strokeWidth / 2.6) * 1.3)
+                                      .clamp(0.8, 4.0) *
+                                  (stroke.penStyle == PenStrokeStyle.highlighter
+                                      ? 2.4
+                                      : 1.0);
+                              canvas
+                                ..saveContext()
+                                ..setStrokeColor(strokePdfColor)
+                                ..setFillColor(strokePdfColor)
+                                ..setLineWidth(pdfLineW)
+                                ..setLineCap(PdfLineCap.round)
+                                ..setLineJoin(PdfLineJoin.round);
+                              if (stroke.penStyle == PenStrokeStyle.dashed) {
+                                canvas.setLineDashPattern(<int>[4, 3]);
+                              }
+
+                              if (pts.length == 1) {
+                                final double x = pts.first.nx * size.x;
+                                final double y = size.y -
+                                    ((pts.first.ry - startRow) * pdfRowHeight);
+                                if (y >= 0 && y <= size.y) {
+                                  canvas
+                                    ..drawEllipse(x, y, 0.85, 0.85)
+                                    ..fillPath();
+                                }
+                                canvas.restoreContext();
+                                continue;
+                              }
+
+                              bool pathStarted = false;
+                              for (int i = 0; i < pts.length; i++) {
+                                final double x = pts[i].nx * size.x;
+                                final double y = size.y -
+                                    ((pts[i].ry - startRow) * pdfRowHeight);
+                                if (y < -4.0 || y > size.y + 4.0) {
+                                  if (pathStarted) {
+                                    canvas.strokePath();
+                                    pathStarted = false;
+                                  }
+                                  continue;
+                                }
+                                final double clampedY = y.clamp(0.0, size.y);
+                                if (!pathStarted) {
+                                  canvas.moveTo(x, clampedY);
+                                  pathStarted = true;
+                                } else {
+                                  canvas.lineTo(x, clampedY);
+                                }
+                              }
+                              if (pathStarted) {
+                                canvas.strokePath();
+                              }
+                              canvas.restoreContext();
+                            }
+                          },
                         ),
                       ),
-                    ),
-                    child: pw.Text(
-                      lineText,
-                      maxLines: 1,
-                      style: rowTextStyle,
-                    ),
-                  );
-                }),
+                  ],
+                ),
               ],
             );
           },

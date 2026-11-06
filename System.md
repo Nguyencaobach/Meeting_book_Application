@@ -181,6 +181,7 @@ lib/
     │       ├── notes_screen.dart            # Màn hình danh sách Thư mục & Tệp ghi chú (.json) trong MeetingBook/Ghi_Chu
     │       ├── note_editor_screen.dart      # Màn hình Trang vở & Biểu mẫu (note5x/note4x/primary_school_eval_v1): Bàn phím Telex, Viết bút, Chỉ xem, Làm mới, Xuất file PDF/Word & Lưu Google Drive
     │       └── widgets/
+    │           ├── floating_pen_bubble_widget.dart # Bong bóng công cụ Bút viết nổi kéo thả tự do + Form 4 mục (Màu chữ, Nét chữ 5 kiểu, Nút tẩy, Hoàn tác nét & nút X) dùng chung cho cả Ghi chú & Sổ dự giờ
     │           └── pen_handwriting_pad_widget.dart # Bảng giấy viết bút 60-120fps (RepaintBoundary): vẽ nét mực mượt, tự nối chữ/cách từ & tự mờ nét sau khi chèn chữ
     │
     └── observation_book/                    # Tab 2: Mô-đun Sổ dự giờ
@@ -224,9 +225,9 @@ Chứa các giá trị bất biến, thông số dòng kẻ và hàm tính toán
 Đảm nhận định nghĩa cấu trúc dữ liệu JSON, lưu tạm tốc độ cao trên RAM và đồng bộ đám mây Google Drive:
 * **`models/`**:
   * **`notebook_model.dart`**: Đại diện cho một tệp ghi chú / sổ dự giờ (`id`, `title`, `paperTemplate` (`note5x`, `note4x`, `primary_school_eval_v1`), `updatedAt`, `pages`).
-  * **`page_model.dart`**: Đại diện cho một trang giấy trong vở (`pageNumber`, `paperTemplate`, và danh sách `List<LineModel> lines`).
-  * **`line_model.dart`**: Lưu nội dung văn bản của từng dòng kẻ ngang hoặc từng ô biểu mẫu (`rowIndex`, chuỗi `text`).
-  * **`stroke_point_model.dart`**: Lưu tọa độ điểm của nét bút viết tay (`x`, `y`, `pressure`, `timestamp`) phục vụ vẽ mực thời gian thực và gửi sang Google ML Kit.
+  * **`page_model.dart`**: Đại diện cho một trang giấy trong vở (`pageNumber`, `paperTemplate`, danh sách `List<LineModel> lines`, và danh sách nét vẽ tự do trên trang `List<FreehandPageStrokeModel> freehandStrokes` phục vụ chế độ Viết bút trực tiếp của Ghi chú).
+  * **`line_model.dart`**: Lưu nội dung của từng dòng kẻ ngang hoặc từng ô biểu mẫu (`rowIndex`, chuỗi `text`, và danh sách cụm nét chữ viết tay đã chuẩn hóa `List<HandwritingClusterModel> handwritingClusters` phục vụ chế độ Viết bút của Sổ dự giờ).
+  * **`stroke_point_model.dart`**: Lưu tọa độ điểm của nét bút (`StrokePointModel`, `InkStrokeModel`), cụm nét chữ viết tay tự co giãn theo chiều cao dòng (`HandwritingClusterModel`) cho Sổ dự giờ, và nét vẽ tự do chuẩn hóa theo tỷ lệ trang/dòng (`FreehandPageStrokeModel`) cho Ghi chú.
 * **`datasources/`**:
   * **`local_storage_datasource.dart`**: Chỉ lưu tạm dữ liệu JSON của cuốn vở đang mở trực tiếp trên **bộ nhớ RAM (`_ramCache`, tốc độ `0ms`)**, tuyệt đối không ghi nội dung vở xuống ổ cứng của máy.
   * **`google_drive_datasource.dart`**: Quản lý toàn bộ kết nối Google Drive API (`MeetingBook/Ghi_Chu`, `MeetingBook/So_Du_Gio` và `MeetingBook/Export File/{Ghi chú, Sổ dự giờ}`):
@@ -267,7 +268,8 @@ Chứa các giá trị bất biến, thông số dòng kẻ và hàm tính toán
     * Menu chọn chế độ: **Bàn phím** (hỗ trợ gõ Tiếng Việt kiểu Telex tích hợp sẵn), **Viết bút**, **Chỉ xem** (tiết kiệm API, chặn chỉnh sửa nhưng vẫn cho phép Zoom/cuộn trang), và **Làm mới** (tải lại JSON mới nhất từ Drive).
     * Hiển thị **con trỏ dọc `|` kèm nút nắm tròn** trên dòng đang chọn để người dùng chạm hoặc kéo ngang con trỏ đến vị trí cần thêm/sửa chữ.
     * Tự động nối dòng, ngắt từ xuống dòng như Microsoft Word và tự dàn lại chữ khi xoay ngang/dọc màn hình.
-  * **`views/widgets/pen_handwriting_pad_widget.dart`**: Bảng giấy viết tay ở nửa dưới màn hình (cách ly bằng `RepaintBoundary` + `ValueNotifier` đạt 60–120fps không lag): viết liên tục tự nối chữ, dừng 1 nhịp (`650ms`) tự cách khoảng trắng, hiển thị nét mực và tự làm mờ nét vẽ sau khi đẩy chữ lên dòng kẻ.
+  * **`views/widgets/floating_pen_bubble_widget.dart`**: Bong bóng công cụ Bút viết nổi kéo thả tự do đến mọi vị trí trên màn hình (dùng chung cho cả **Tab Ghi chú** và **Tab Sổ dự giờ** khi bật chế độ **Viết bút**). Bấm vào bong bóng mở ra Form công cụ gồm **4 mục**: **1. Màu chữ** (6 màu mực), **2. Nét chữ** (5 kiểu nét vẽ vector: *Bút bi, Bút máy thanh đậm, Bút lông, Dạ quang tô sáng, Nét đứt* + chọn cỡ độ dày nét và khung xem trước), **3. Nút tẩy** (đổi icon bong bóng sang hình cục tẩy và dùng lại logic chạm/kéo xóa nét hiện tại), **4. Nút Hoàn tác nét**; kèm nút **`X`** ở góc trên (chỉ khi bấm `X` mới đóng Form để người dùng bấm Hoàn tác nhiều lần thoải mái).
+  * **`views/widgets/pen_handwriting_pad_widget.dart`**: Bảng giấy viết tay ở nửa dưới màn hình (cách ly bằng `RepaintBoundary` + `ValueNotifier` đạt 60–120fps không lag): đồng bộ trực tiếp Màu chữ, Kiểu nét, Độ dày nét và Cục tẩy từ Bong bóng Bút; viết liên tục tự nối chữ, dừng 1 nhịp (`650ms`) tự cách khoảng trắng, hiển thị nét mực và tự làm mờ nét vẽ sau khi đẩy chữ lên dòng kẻ.
 * **`features/observation_book/`**:
   * **`views/observation_book_screen.dart`** & **`controllers/observation_book_controller.dart`**: Quản lý cây thư mục và các tệp Sổ dự giờ (`.json`) trong Tab Sổ dự giờ (`MeetingBook/So_Du_Gio`); bấm vào thư mục để mở vào trong, bấm vào tệp sổ dự giờ để mở màn hình biểu mẫu soạn thảo.
 
@@ -307,7 +309,7 @@ touch lib/app.dart \
       lib/features/home/views/widgets/create_item_bottom_sheet.dart \
       lib/features/notes/controllers/notes_controller.dart \
       lib/features/notes/views/{notes_screen.dart,note_editor_screen.dart} \
-      lib/features/notes/views/widgets/pen_handwriting_pad_widget.dart \
+      lib/features/notes/views/widgets/{floating_pen_bubble_widget.dart,pen_handwriting_pad_widget.dart} \
       lib/features/observation_book/controllers/observation_book_controller.dart \
       lib/features/observation_book/views/observation_book_screen.dart
 ```
@@ -423,3 +425,59 @@ flutter pub add google_fonts "google_sign_in:^6.2.2" googleapis http shared_pref
    * Cấu hình `release` trong `android/app/build.gradle.kts` đã tắt `isMinifyEnabled = false` và `isShrinkResources = false` (tránh R8 cắt nhầm class `WorkDatabase` của Google ML Kit gây văng app khi khởi chạy) và dùng chung chữ ký `signingConfigs.getByName("debug")` trên máy tính phát triển, nên file `app-release.apk` xuất ra giữ nguyên mã **SHA-1** đã khai báo trên Google Cloud Console.
    * Trong `android/app/src/main/AndroidManifest.xml` đã khai báo đầy đủ quyền `INTERNET`, `ACCESS_NETWORK_STATE` và `android:resizeableActivity="true"`.
    * Bất kỳ thiết bị Android nào cài file `.apk` này đều đăng nhập Gmail và tự động khởi tạo cây thư mục `MeetingBook/` riêng trên Google Drive của người đó (kết hợp với **Cách 1** hoặc **Cách 2** tại mục **7.2**).
+
+---
+
+## 8. Cơ chế Chế độ Viết Bút (`Nét viết tự nhiên` & `Nét đánh máy`) và Bong Bóng Công Cụ Bút Nổi (`FloatingPenBubbleWidget`)
+
+### 8.1. Bong bóng công cụ Bút viết nổi kéo thả tự do (`floating_pen_bubble_widget.dart`) — Dùng chung cho cả 2 Tab Ghi chú & Sổ dự giờ
+Khi người dùng chọn chế độ **Viết bút** (`NoteInputMode.pen`) ở cả **Tab Ghi chú** lẫn **Tab Sổ dự giờ**:
+1. **Giao diện Bong bóng nổi kéo thả tự do (Không chiếm thanh ngang dưới Header):**
+   * Loại bỏ hoàn toàn thanh công cụ ngang cố định dưới Header để trả lại tối đa diện tích mặt giấy / biểu mẫu.
+   * Hiển thị **Bong bóng Bút nổi** hình tròn có icon cây bút kèm chấm tròn báo màu mực đang chọn (hoặc tự động đổi sang icon **Cục tẩy** màu đỏ khi đang bật chế độ tẩy, kèm huy hiệu nhỏ báo đang bật **Cây thước kẻ** hoặc **Nét đánh máy**).
+   * Người dùng có thể **kéo thả bong bóng đi bất kỳ đâu trên màn hình** (tự động giới hạn trong khung màn hình kể cả khi xoay ngang/dọc máy tính bảng).
+2. **Form Công cụ Bút (Đã bỏ đánh số thứ tự đầu dòng) & Cơ chế đóng bằng nút `X`:**
+   * Khi bấm vào bong bóng sẽ mở **Form Công cụ Bút viết** (có thể nắm thanh tiêu đề Form để kéo di chuyển).
+   * Form **chỉ tắt khi người dùng chủ động bấm nút `X`** ở góc phải tiêu đề Form (giúp người dùng bấm nút **Hoàn tác** nhiều lần liên tiếp hoặc đổi màu/nét/thước kẻ/chế độ hiển thị mà Form không bị tự đóng).
+   * Bên trong Form gồm các khu vực chức năng (không đánh số thứ tự `1, 2, 3, 4, 5` ở đầu):
+     * **`Màu chữ`:** Chọn nhanh 6 màu mực chuẩn (*Xanh mực `#263BAA`, Đen `#000000`, Đỏ chấm bài `#E53935`, Xanh lá `#2E7D32`, Tím `#6A1B9A`, Cam đậm `#E65100`*). Áp dụng cho cả nét vẽ tự nhiên lẫn chữ đánh máy nhận diện từ bảng viết Bottom Sheet.
+     * **`Nét chữ`:** Bấm vào sẽ mở rộng **Bộ công cụ các nét vẽ (`PenStrokeStyle`)** gồm:
+       * **5 kiểu nét vẽ vector phần cứng (`dart:ui` Canvas 60–120fps):**
+         * **Bút bi (`ballpoint`):** Nét tròn đều, sắc nét chuẩn ghi chép.
+         * **Bút máy (`fountain`):** Nét thanh nét đậm mềm mại theo góc ngòi bút.
+         * **Bút lông (`marker`):** Nét dày đậm rõ ràng để ghi tiêu đề, nhấn mạnh.
+         * **Bút dạ quang (`highlighter`):** Nét bản rộng bán trong suốt (`alpha 0.34`) để tô sáng nội dung mà không che chữ.
+         * **Nét đứt (`dashed`):** Nét gạch đứt đoạn trực quan để kẻ nối/gạch chân.
+       * **Cỡ độ dày nét vẽ:** Chọn nhanh 4 mức (*Mảnh `1.6px`, Vừa `2.6px`, Đậm `4.0px`, Rất đậm `5.8px`*) hoặc kéo thanh trượt `Slider` (`1.2px` $\rightarrow$ `6.5px`) kèm **Khung xem trước nét vẽ trực tiếp (Live Stroke Preview)**.
+     * **`Nút tẩy` / `Đang tẩy` & `Hoàn tác`:**
+       * **Nút tẩy:** Đổi icon bong bóng sang hình Cục tẩy; ở chế độ *Nét viết tự nhiên* chạm/kéo qua nét nào là xóa nét đó, ở chế độ *Nét đánh máy* chạm vào dòng hoặc quẹt trên bảng viết để xóa lùi chữ.
+       * **Hoàn tác:** Hoàn tác liên tục nhiều bước cho cả nét vẽ tự nhiên lẫn chữ đánh máy vừa nhận diện.
+     * **`Chế độ hiển thị nét viết` (`Nét viết tự nhiên` $\leftrightarrow$ `Nét đánh máy`):**
+       * **`Nét viết tự nhiên` (`isTypedHandwritingMode == false`, mặc định):** Cho phép người dùng viết/vẽ trực tiếp lên mặt giấy ở tốc độ 60–120fps như hiện tại (giữ nguyên toàn bộ nét vẽ đã có trên trang giấy).
+       * **`Nét đánh máy` (`isTypedHandwritingMode == true`):** Bật lại cơ chế chạm chọn dòng/ô kèm con trỏ `|` và mở **Bottom Sheet viết bút** (`PenHandwritingPadWidget`). Người dùng viết bằng bút trên Bottom Sheet (hiển thị đúng màu mực, kiểu nét, độ dày nét của bong bóng), khi ngừng 1 nhịp (`650ms`), AI Google ML Kit Digital Ink Recognition (`vi`) tự động chuyển nét viết thành **chữ đánh máy chuẩn** và chèn thẳng lên dòng đang chọn với đúng màu chữ của bong bóng (tự nối chữ nếu viết nhanh, tự cách từ nếu dừng 1 nhịp, tự xuống dòng như Word khi hết dòng, tự tính điểm/xếp loại nếu viết vào ô điểm Sổ dự giờ).
+     * **`Cây thước kẻ (Kẻ đường thẳng)` (`VirtualRulerOverlayWidget`):** Bật/tắt **Cây thước kẻ ảo trong suốt có vạch chia cm/mm** ngay trên mặt giấy:
+       * **Di chuyển & Xoay 360°:** Giữ kéo phần thân giữa của thước để di chuyển; giữ kéo 2 nút xoay tròn ở 2 đầu thước (hoặc dùng 2 ngón tay xoay, hoặc bấm nút nhanh `Xoay 90°` / `Về 0°`) để xoay thước mượt mà theo mọi góc độ.
+       * **Hít mép thước kẻ thẳng tuyệt đối (Magnetic Edge Snap):** Khi đặt bút kéo dọc theo gần mép trên hoặc mép dưới của cây thước, nét bút tự động hít thẳng tắp 100% dọc theo đúng cạnh thước.
+
+### 8.2. Cơ chế Viết/vẽ trực tiếp lên mặt giấy thống nhất cho cả Ghi chú (`note5x.dart`, `note4x.dart`) & Sổ dự giờ (`primary_school_evaluation_template.dart`)
+1. **Khi chọn chế độ Viết bút (`NoteInputMode.pen`):**
+   * **Tắt** khung chọn dòng màu xanh, **ẩn** con trỏ `|` và **KHÔNG** mở Bottom Sheet ở dưới ở cả **Ghi chú** lẫn **Sổ dự giờ**.
+   * Toàn bộ trang vở ô ly hoặc biểu mẫu Sổ dự giờ 3 trang hiển thị như một tờ giấy / bức ảnh tĩnh: Người dùng đặt bút cảm ứng (hoặc kéo chuột / 1 ngón tay) lên bất kỳ đâu trên mặt giấy (ô thông tin, bảng 3 cột, nhận xét chung, bảng điểm hoặc ký tên trực tiếp dưới mục *"Người dự giờ (Ký, ghi rõ họ tên)"*) là **vẽ nét mực trực tiếp** lên đúng vị trí đó ở tốc độ **60–120fps** theo đúng **Màu chữ, Kiểu nét & Độ dày nét** do người dùng tự chỉnh trong Bong bóng Bút (`RepaintBoundary` + `ValueNotifier<int> _freehandCanvasRepaintVersion` + `_NotePageFreehandCanvasPainter`).
+2. **Thao tác cuộn/zoom & Tẩy xóa qua Bong bóng Bút:**
+   * Dùng **1 đầu bút / 1 ngón tay** để viết/vẽ hoặc tẩy trực tiếp lên trang giấy; dùng **2 ngón tay** để cuộn lên/xuống trang vở hoặc 3 trang biểu mẫu Sổ dự giờ.
+   * Sử dụng **Bong bóng Bút nổi** (`FloatingPenBubbleWidget`) để đổi màu mực, đổi 5 kiểu nét vẽ, tự chỉnh độ dày nét, bật **Cục tẩy** (chạm/kéo qua nét nào là xóa nét đó) hoặc bấm **Hoàn tác** liên tục.
+3. **Khi chuyển sang chế độ Bàn phím (`NoteInputMode.keyboard`):**
+   * Giao diện lập tức **bật lại chế độ chạm chọn dòng/ô**, hiện khung dòng đang chọn và con trỏ `|` để gõ chữ bằng bàn phím bình thường (vẫn hỗ trợ tự động tính tổng điểm và tự động xét loại tiết dạy trên Sổ dự giờ).
+   * Các nét đã viết bằng bút trên trang vở / biểu mẫu vẫn được giữ nguyên trên mặt giấy (hiển thị song song cả chữ đánh máy lẫn nét bút vẽ).
+
+### 8.3. Lưu trữ RAM $\rightarrow$ Google Drive, Hiệu năng 60–120fps & Tiết kiệm tuyệt đối Google Drive API
+1. **Lưu trữ JSON siêu nhẹ trên RAM & Google Drive (`line_model.dart`, `page_model.dart`):**
+   * `PageModel`: Lưu danh sách các nét vẽ tự do trên mặt giấy (`freehandStrokes`, lưu tọa độ chuẩn hóa `nx = x / paperWidth`, `ry = y / rowHeight` kèm màu mực `c`, độ dày `w`, kiểu nét `st`) dùng chung cho cả **Ghi chú** và **Sổ dự giờ** (khi xoay màn hình ngang/dọc nét chữ vẫn bám đúng vị trí dòng/biểu mẫu).
+   * **Tuân thủ tuyệt đối quy tắc số 4:** Toàn bộ dữ liệu nét vẽ chỉ lưu tạm trên **RAM (`_ramCache`)** và đồng bộ thẳng lên Google Drive ở **3 thời điểm vàng** hoặc khi bấm nút **Lưu** (tuyệt đối không ghi xuống ổ cứng máy).
+2. **Đảm bảo hệ thống mượt 60–120fps & Tiết kiệm Google Drive API:**
+   * **Không tốn thêm bất kỳ lệnh gọi Google Drive API nào:** Lúc đang viết/vẽ bằng bút hoặc đổi công cụ trong bong bóng, mọi nét vẽ chỉ cập nhật trên bộ nhớ RAM (`0` cuộc gọi API khi đang kéo bút). Cơ chế gom nhóm (Debounce `30 giây`) và chỉ đẩy JSON lên Google Drive ở **3 thời điểm vàng** (hoặc khi bấm nút **Lưu**) được giữ nguyên 100%.
+   * **Vẽ vector phần cứng trực tiếp (`PenStrokeStyle`):** Sử dụng `Canvas` + `PathMetric` gốc của Flutter (`dart:ui`), không phụ thuộc thư viện nặng bên ngoài nên đạt 60–120fps tức thì.
+3. **Tương thích 100% với nút Làm sạch & Xuất file (`PDF` / `Word`):**
+   * **Nút Làm sạch:** Xóa sạch cả văn bản bàn phím lẫn toàn bộ nét chữ viết tay trên trang (kèm nút **Hoàn tác** khôi phục lại nguyên trạng 100% cả chữ gõ phím và nét bút).
+   * **Xuất file PDF (`pdf_export_service.dart`) & Word (`word_export_service.dart`):** Tự động kết xuất đầy đủ cả chữ đánh máy lẫn các nét chữ viết tay (giữ đúng màu mực, độ dày nét, bút dạ quang, nét đứt) vào tệp `.pdf` và `.doc` đẩy lên thư mục `MeetingBook/Export File` trên Google Drive.
+

@@ -362,6 +362,33 @@ class PrimarySchoolEvaluationTemplate {
     );
   }
 
+  /// Tính chiều ngang vùng viết tối đa cho dòng `rowIndex` trên biểu mẫu Sổ dự giờ
+  /// (Hỗ trợ tự động xuống dòng chuẩn xác trong từng cột của Bảng 3 cột và mục Nhận xét chung)
+  static double getMaxTextWidthForRow(
+    int rowIndex, {
+    required double paperWidth,
+  }) {
+    final double hPad = getResponsiveHorizontalPadding(paperWidth);
+    final double contentWidth = paperWidth - (hPad * 2);
+
+    // Bảng 3 cột (Cột 1: 35%, Cột 2: 33%, Cột 3: 32%)
+    if (rowIndex >= col1StartRow &&
+        rowIndex < col1StartRow + activityTableRowCount) {
+      return (contentWidth * 0.35 - 14.0).clamp(80.0, contentWidth);
+    }
+    if (rowIndex >= col2StartRow &&
+        rowIndex < col2StartRow + activityTableRowCount) {
+      return (contentWidth * 0.33 - 14.0).clamp(80.0, contentWidth);
+    }
+    if (rowIndex >= col3StartRow &&
+        rowIndex < col3StartRow + activityTableRowCount) {
+      return (contentWidth * 0.32 - 14.0).clamp(80.0, contentWidth);
+    }
+
+    // Mục Nhận xét chung (5 dòng toàn chiều ngang)
+    return (contentWidth - 14.0).clamp(120.0, contentWidth);
+  }
+
   /// Lấy tên hiển thị thân thiện của ô/dòng đang chọn để hiện trên thanh trạng thái Bàn phím / Viết bút
   static String getFieldDisplayName(int rowIndex) {
     if (rowIndex == rowTeacherName) return 'Họ, tên người dạy';

@@ -5,6 +5,7 @@ import '../core/constants/note_templates/note4x.dart';
 import '../core/constants/observation_templates/primary_school_evaluation_template.dart';
 import '../data/models/line_model.dart';
 import '../data/models/notebook_model.dart';
+import '../data/models/stroke_point_model.dart';
 
 // ===========================================================================
 // DỊCH VỤ KẾT XUẤT FILE WORD (.DOC) TRỰC TIẾP TRÊN RAM (WORD EXPORT SERVICE)
@@ -29,6 +30,12 @@ class WordExportService {
     required int tabIndex,
   }) {
     final Map<int, String> rowMap = _extractRowTextMap(notebook);
+    final Map<int, List<HandwritingClusterModel>> clusterMap =
+        _extractRowClusterMap(notebook);
+    final List<FreehandPageStrokeModel> freehandStrokes =
+        notebook.pages.isEmpty
+            ? const <FreehandPageStrokeModel>[]
+            : notebook.pages.first.freehandStrokes;
     final bool isObservationForm = tabIndex == 1 ||
         PrimarySchoolEvaluationTemplate.isObservationTemplate(
           notebook.paperTemplate,
@@ -38,6 +45,8 @@ class WordExportService {
         ? _buildPrimarySchoolEvaluationWordHtml(
             title: notebook.title,
             rowMap: rowMap,
+            clusterMap: clusterMap,
+            freehandStrokes: freehandStrokes,
           )
         : _buildNoteRuledWordHtml(
             notebook: notebook,
@@ -59,9 +68,86 @@ class WordExportService {
     return map;
   }
 
+  /// Trích xuất Map (rowIndex -> danh sách cụm nét chữ viết tay) từ trang đầu tiên
+  static Map<int, List<HandwritingClusterModel>> _extractRowClusterMap(
+    NotebookModel notebook,
+  ) {
+    final Map<int, List<HandwritingClusterModel>> map =
+        <int, List<HandwritingClusterModel>>{};
+    if (notebook.pages.isEmpty) return map;
+    for (final LineModel line in notebook.pages.first.lines) {
+      if (line.handwritingClusters.isNotEmpty) {
+        map[line.rowIndex] = line.handwritingClusters;
+      }
+    }
+    return map;
+  }
+
   /// Mã hóa ký tự đặc biệt HTML để tránh vỡ cấu trúc bảng Word
   static String _escapeHtml(String input) {
     return const HtmlEscape().convert(input);
+  }
+
+  static String _toCssHexColor(int colorValue) {
+    final int rgb = colorValue & 0x00FFFFFF;
+    return '#${rgb.toRadixString(16).padLeft(6, '0').toUpperCase()}';
+  }
+
+  /// Tạo chuỗi HTML kết hợp văn bản gõ phím và SVG nét chữ viết tay trên 1 dòng Sổ dự giờ
+  static String _buildRowContentHtml({
+    required int rowIndex,
+    required Map<int, String> rowMap,
+    required Map<int, List<HandwritingClusterModel>> clusterMap,
+    double svgHeight = 19.0,
+  }) {
+    final String text = _escapeHtml(rowMap[rowIndex] ?? '');
+    final List<HandwritingClusterModel> clusters =
+        clusterMap[rowIndex] ?? const <HandwritingClusterModel>[];
+    if (clusters.isEmpty) return text;
+
+    final StringBuffer polySb = StringBuffer();
+    double cursorX = 1.0;
+    final double targetH = svgHeight * 0.80;
+    final double topOffset = (svgHeight - targetH) * 0.5;
+
+    for (int i = 0; i < clusters.length; i++) {
+      final HandwritingClusterModel cluster = clusters[i];
+      if (i > 0 || cluster.leadingSpace) {
+        cursorX += cluster.getLeadingGap(svgHeight);
+      }
+      final double cWidth = cluster.getRenderedWidth(svgHeight);
+      final String hexColor = _toCssHexColor(cluster.colorValue);
+      final double svgStrokeW = ((cluster.strokeWidth / 2.6) * 1.5)
+          .clamp(0.9, 3.6) *
+          (cluster.penStyle == PenStrokeStyle.highlighter ? 2.4 : 1.0);
+      final String extraSvgAttrs =
+          cluster.penStyle == PenStrokeStyle.highlighter
+              ? ' stroke-opacity="0.35"'
+              : (cluster.penStyle == PenStrokeStyle.dashed
+                  ? ' stroke-dasharray="4,3"'
+                  : '');
+
+      for (final InkStrokeModel stroke in cluster.strokes) {
+        if (stroke.points.isEmpty) continue;
+        final String pointsAttr = stroke.points
+            .map(
+              (StrokePointModel p) =>
+                  '${(cursorX + p.x * cWidth).toStringAsFixed(1)},${(topOffset + p.y * targetH).toStringAsFixed(1)}',
+            )
+            .join(' ');
+        polySb.write(
+          '<polyline fill="none" stroke="$hexColor" stroke-width="${svgStrokeW.toStringAsFixed(1)}"$extraSvgAttrs stroke-linecap="round" stroke-linejoin="round" points="$pointsAttr" />',
+        );
+      }
+      cursorX += cWidth;
+    }
+
+    final int totalW = (cursorX + 2.0).ceil();
+    final int totalH = svgHeight.ceil();
+    final String svgHtml =
+        '<svg xmlns="http://www.w3.org/2000/svg" width="$totalW" height="$totalH" viewBox="0 0 $totalW $totalH" style="vertical-align: middle; display: inline-block;">${polySb.toString()}</svg>';
+
+    return text.isEmpty ? svgHtml : '$text $svgHtml';
   }
 
   // ===========================================================================
@@ -70,21 +156,30 @@ class WordExportService {
   static String _buildPrimarySchoolEvaluationWordHtml({
     required String title,
     required Map<int, String> rowMap,
+    required Map<int, List<HandwritingClusterModel>> clusterMap,
+    required List<FreehandPageStrokeModel> freehandStrokes,
   }) {
     String getRowText(int rowIndex) => rowMap[rowIndex] ?? '';
+    String getRowHtml(int rowIndex, {double svgHeight = 19.0}) =>
+        _buildRowContentHtml(
+          rowIndex: rowIndex,
+          rowMap: rowMap,
+          clusterMap: clusterMap,
+          svgHeight: svgHeight,
+        );
     final scoreEval =
         PrimarySchoolEvaluationTemplate.evaluateScores(getRowText);
 
     final String teacherName =
-        _escapeHtml(getRowText(PrimarySchoolEvaluationTemplate.rowTeacherName));
+        getRowHtml(PrimarySchoolEvaluationTemplate.rowTeacherName);
     final String className =
-        _escapeHtml(getRowText(PrimarySchoolEvaluationTemplate.rowClassName));
+        getRowHtml(PrimarySchoolEvaluationTemplate.rowClassName);
     final String schoolName =
-        _escapeHtml(getRowText(PrimarySchoolEvaluationTemplate.rowSchoolName));
+        getRowHtml(PrimarySchoolEvaluationTemplate.rowSchoolName);
     final String lessonTitle =
-        _escapeHtml(getRowText(PrimarySchoolEvaluationTemplate.rowLessonTitle));
+        getRowHtml(PrimarySchoolEvaluationTemplate.rowLessonTitle);
     final String subjectName =
-        _escapeHtml(getRowText(PrimarySchoolEvaluationTemplate.rowSubjectName));
+        getRowHtml(PrimarySchoolEvaluationTemplate.rowSubjectName);
 
     final StringBuffer sb = StringBuffer();
 
@@ -251,14 +346,14 @@ class WordExportService {
         r++) {
       final bool isLast =
           r == PrimarySchoolEvaluationTemplate.activityTableRowCount - 1;
-      final String c1 = _escapeHtml(
-        getRowText(PrimarySchoolEvaluationTemplate.col1StartRow + r),
+      final String c1 = getRowHtml(
+        PrimarySchoolEvaluationTemplate.col1StartRow + r,
       );
-      final String c2 = _escapeHtml(
-        getRowText(PrimarySchoolEvaluationTemplate.col2StartRow + r),
+      final String c2 = getRowHtml(
+        PrimarySchoolEvaluationTemplate.col2StartRow + r,
       );
-      final String c3 = _escapeHtml(
-        getRowText(PrimarySchoolEvaluationTemplate.col3StartRow + r),
+      final String c3 = getRowHtml(
+        PrimarySchoolEvaluationTemplate.col3StartRow + r,
       );
       final String bottomBorderCss =
           isLast ? '1pt solid #000000' : '1pt dashed #4A65C6';
@@ -288,8 +383,8 @@ class WordExportService {
     for (int i = 0;
         i < PrimarySchoolEvaluationTemplate.generalCommentLineCount;
         i++) {
-      final String cmt = _escapeHtml(
-        getRowText(PrimarySchoolEvaluationTemplate.generalCommentStartRow + i),
+      final String cmt = getRowHtml(
+        PrimarySchoolEvaluationTemplate.generalCommentStartRow + i,
       );
       sb.write(
         '  <div class="comment-line">${cmt.isEmpty ? '&nbsp;' : cmt}</div>\n',
@@ -318,8 +413,7 @@ class WordExportService {
 
       for (int i = 0; i < groupSpecs.length; i++) {
         final ObservationCriterionSpec spec = groupSpecs[i];
-        final String scoreVal =
-            _escapeHtml(getRowText(spec.scoreRowIndex));
+        final String scoreVal = getRowHtml(spec.scoreRowIndex);
         final String groupTitleHtml =
             _escapeHtml(spec.groupTitle).replaceAll('\n', '<br/>');
 
@@ -357,19 +451,20 @@ class WordExportService {
     // -------------------------------------------------------------------------
     // TRANG 3: QUY ĐỊNH ĐIỂM ĐÁNH GIÁ, XẾP LOẠI & CHỮ KÝ NGƯỜI DỰ GIỜ
     // -------------------------------------------------------------------------
-    final String rawRating =
-        getRowText(PrimarySchoolEvaluationTemplate.rowEvaluatedRating);
-    final String ratingText = _escapeHtml(
-      rawRating.isNotEmpty ? rawRating : (scoreEval.suggestedRating ?? ''),
-    );
+    final String rawRatingHtml =
+        getRowHtml(PrimarySchoolEvaluationTemplate.rowEvaluatedRating);
+    final String ratingText = rawRatingHtml.isNotEmpty
+        ? rawRatingHtml
+        : _escapeHtml(scoreEval.suggestedRating ?? '');
     final String signDay =
-        _escapeHtml(getRowText(PrimarySchoolEvaluationTemplate.rowSignDay));
+        getRowHtml(PrimarySchoolEvaluationTemplate.rowSignDay);
     final String signMonth =
-        _escapeHtml(getRowText(PrimarySchoolEvaluationTemplate.rowSignMonth));
+        getRowHtml(PrimarySchoolEvaluationTemplate.rowSignMonth);
     final String signYear =
-        _escapeHtml(getRowText(PrimarySchoolEvaluationTemplate.rowSignYear));
-    final String observerName = _escapeHtml(
-      getRowText(PrimarySchoolEvaluationTemplate.rowObserverName),
+        getRowHtml(PrimarySchoolEvaluationTemplate.rowSignYear);
+    final String observerName = getRowHtml(
+      PrimarySchoolEvaluationTemplate.rowObserverName,
+      svgHeight: 24.0,
     );
 
     sb.write('''
@@ -406,6 +501,49 @@ class WordExportService {
       </td>
     </tr>
   </table>
+''');
+
+    if (freehandStrokes.isNotEmpty) {
+      const double evalPageWidthPx = 660.0;
+      const double evalRowHeightPx = 28.0;
+      double maxRy = 108.0;
+      for (final FreehandPageStrokeModel stroke in freehandStrokes) {
+        for (final StrokePointModel p in stroke.points) {
+          if (p.ry + 2.0 > maxRy) {
+            maxRy = p.ry + 2.0;
+          }
+        }
+      }
+      final double totalEvalHeightPx = maxRy * evalRowHeightPx;
+      sb.write(
+        '  <svg xmlns="http://www.w3.org/2000/svg" width="${evalPageWidthPx.toInt()}" height="${totalEvalHeightPx.toInt()}" viewBox="0 0 ${evalPageWidthPx.toInt()} ${totalEvalHeightPx.toInt()}" style="position: absolute; top: 0; left: 0; pointer-events: none;">\n',
+      );
+      for (final FreehandPageStrokeModel stroke in freehandStrokes) {
+        if (stroke.points.isEmpty) continue;
+        final String hexColor = _toCssHexColor(stroke.colorValue);
+        final double svgStrokeW =
+            ((stroke.strokeWidth / 2.6) * 1.8).clamp(1.0, 4.5) *
+                (stroke.penStyle == PenStrokeStyle.highlighter ? 2.4 : 1.0);
+        final String extraSvgAttrs =
+            stroke.penStyle == PenStrokeStyle.highlighter
+                ? ' stroke-opacity="0.35"'
+                : (stroke.penStyle == PenStrokeStyle.dashed
+                    ? ' stroke-dasharray="5,4"'
+                    : '');
+        final String pointsAttr = stroke.points
+            .map(
+              (StrokePointModel p) =>
+                  '${(p.x * evalPageWidthPx).toStringAsFixed(1)},${(p.y * evalRowHeightPx).toStringAsFixed(1)}',
+            )
+            .join(' ');
+        sb.write(
+          '    <polyline fill="none" stroke="$hexColor" stroke-width="${svgStrokeW.toStringAsFixed(1)}"$extraSvgAttrs stroke-linecap="round" stroke-linejoin="round" points="$pointsAttr" />\n',
+        );
+      }
+      sb.write('  </svg>\n');
+    }
+
+    sb.write('''
 </div>
 </body>
 </html>
@@ -422,11 +560,27 @@ class WordExportService {
     required Map<int, String> rowMap,
   }) {
     final bool isNote4x = notebook.paperTemplate == Note4x.templateId;
-    final int highestRow = rowMap.keys.isEmpty
+    final List<FreehandPageStrokeModel> freehandStrokes =
+        notebook.pages.isEmpty
+            ? const <FreehandPageStrokeModel>[]
+            : notebook.pages.first.freehandStrokes;
+    final int highestTextRow = rowMap.keys.isEmpty
         ? 0
         : rowMap.keys.reduce(math.max);
+    int highestStrokeRow = 0;
+    for (final FreehandPageStrokeModel stroke in freehandStrokes) {
+      for (final StrokePointModel p in stroke.points) {
+        highestStrokeRow = math.max(highestStrokeRow, p.y.ceil());
+      }
+    }
     final int minRows = isNote4x ? 26 : 24;
-    final int totalRows = math.max(minRows, highestRow + 1);
+    final int totalRows = math.max(
+      minRows,
+      math.max(highestTextRow + 1, highestStrokeRow + 1),
+    );
+    const double rowHeightPx = 30.0;
+    const double pageWidthPx = 660.0;
+    final double totalHeightPx = totalRows * rowHeightPx;
 
     final StringBuffer sb = StringBuffer();
     sb.write('''
@@ -466,24 +620,56 @@ class WordExportService {
     }
     .ruled-line {
       border-bottom: 1pt solid #263BAA;
-      min-height: 22pt;
-      padding: 4pt 4pt 2pt 4pt;
+      height: 22pt;
+      line-height: 22pt;
+      padding: 0 4pt;
     }
   </style>
 </head>
 <body>
 <div class="WordSection1">
   <div class="note-title">${_escapeHtml(notebook.title)}</div>
+  <div style="position: relative; width: ${pageWidthPx.toInt()}px;">
 ''');
 
     for (int r = 0; r < totalRows; r++) {
       final String text = _escapeHtml(rowMap[r] ?? '');
       sb.write(
-        '  <div class="ruled-line">${text.isEmpty ? '&nbsp;' : text}</div>\n',
+        '    <div class="ruled-line">${text.isEmpty ? '&nbsp;' : text}</div>\n',
       );
     }
 
+    if (freehandStrokes.isNotEmpty) {
+      sb.write(
+        '    <svg xmlns="http://www.w3.org/2000/svg" width="${pageWidthPx.toInt()}" height="${totalHeightPx.toInt()}" viewBox="0 0 ${pageWidthPx.toInt()} ${totalHeightPx.toInt()}" style="position: absolute; top: 0; left: 0; pointer-events: none;">\n',
+      );
+      for (final FreehandPageStrokeModel stroke in freehandStrokes) {
+        if (stroke.points.isEmpty) continue;
+        final String hexColor = _toCssHexColor(stroke.colorValue);
+        final double svgStrokeW = ((stroke.strokeWidth / 2.6) * 1.8)
+            .clamp(1.0, 4.5) *
+            (stroke.penStyle == PenStrokeStyle.highlighter ? 2.4 : 1.0);
+        final String extraSvgAttrs =
+            stroke.penStyle == PenStrokeStyle.highlighter
+                ? ' stroke-opacity="0.35"'
+                : (stroke.penStyle == PenStrokeStyle.dashed
+                    ? ' stroke-dasharray="5,4"'
+                    : '');
+        final String pointsAttr = stroke.points
+            .map(
+              (StrokePointModel p) =>
+                  '${(p.x * pageWidthPx).toStringAsFixed(1)},${(p.y * rowHeightPx).toStringAsFixed(1)}',
+            )
+            .join(' ');
+        sb.write(
+          '      <polyline fill="none" stroke="$hexColor" stroke-width="${svgStrokeW.toStringAsFixed(1)}"$extraSvgAttrs stroke-linecap="round" stroke-linejoin="round" points="$pointsAttr" />\n',
+        );
+      }
+      sb.write('    </svg>\n');
+    }
+
     sb.write('''
+  </div>
 </div>
 </body>
 </html>

@@ -7,32 +7,56 @@ import '../../../../services/handwriting_recognition_service.dart';
 import '../../../../services/stylus_input_filter.dart';
 
 // ===========================================================================
-// BẢNG VIẾT BÚT CẢM ỨNG NHƯ ỨNG DỤNG PAINT & GIẤY THẬT TRONG BOTTOM SHEET
+// BẢNG VIẾT BÚT CẢM ỨNG TRONG BOTTOM SHEET DÀNH CHO CHẾ ĐỘ "NÉT ĐÁNH MÁY"
 // (PEN HANDWRITING PAD WIDGET - TỐI ƯU 0MS LAG VỚI REPAINTBOUNDARY)
 // Công dụng:
 // - Hiển thị mặt giấy viết phóng lớn có đường kẻ ngang dẫn hướng.
-// - Khi người dùng bấm giữ chuột kéo (trên máy ảo) hoặc viết bằng Bút cảm ứng / Tay:
-//   + Vẽ nét mực tức thì như ứng dụng Paint (60-120fps) qua ValueNotifier + CustomPainter
-//     mà KHÔNG gọi setState() làm vẽ lại màn hình vở bên trên (chống lag 100%).
-//   + Viết liên tục (nhấc bút < 650ms hoặc viết nối tiếp ngay sau khi nét ẩn):
-//     Tự động nối liền các ký tự với nhau thành 1 từ hoàn chỉnh.
-//   + Ngừng một khoảnh khắc (>= 650ms sau khi nét trước đã lên dòng):
-//     Tự động cách ra 1 khoảng trắng (' ') trước từ tiếp theo.
-//   + Sau khi chữ được điền vào dòng vở bên trên, nét vẽ trên Bottom Sheet
-//     tự động mờ dần và ẩn đi để trả lại mặt giấy trắng viết tiếp ngay tại chỗ.
+// - Đồng bộ trực tiếp với Bong bóng Bút viết nổi (FloatingPenBubbleWidget):
+//   + Hiển thị đúng Màu chữ (selectedColorValue), Kiểu nét (selectedPenStyle)
+//     và Độ dày nét (selectedStrokeWidth) người dùng đã chọn trong bong bóng.
+//   + Hỗ trợ chế độ Cục tẩy (isEraserMode): chạm hoặc kéo trên bảng viết để xóa
+//     từ/ký tự trên dòng đang chọn.
+// - Khi nhấc bút nghỉ 1 nhịp (650ms): Gọi Google ML Kit Digital Ink Recognition ('vi')
+//   nhận diện nét chữ viết tay thành chữ đánh máy chuẩn (onCommitRecognizedText)
+//   và chèn thẳng lên dòng đang chọn với đúng màu chữ của bong bóng.
 // ===========================================================================
 class PenHandwritingPadWidget extends StatefulWidget {
-  /// Chuỗi văn bản hiện có trên dòng đang chọn (dùng làm ngữ cảnh preContext cho AI)
-  final String Function() getCurrentRowCleanText;
-
-  /// Callback khi AI nhận diện xong nét vẽ để điền vào dòng đang chọn
-  final void Function(String recognizedText, {required bool insertLeadingSpace})
+  /// Callback khi người dùng viết xong 1 cụm nét và AI nhận diện thành chữ đánh máy
+  final void Function(String recognizedText, {required bool leadingSpace})?
       onCommitRecognizedText;
+
+  /// Callback cung cấp ngữ cảnh chữ đứng trước trên dòng đang chọn để tăng độ chính xác nhận diện Tiếng Việt
+  final String Function()? preContextProvider;
+
+  /// Callback tùy chọn khi dùng chế độ cụm nét vẽ thu phóng
+  final void Function(HandwritingClusterModel cluster)?
+      onCommitHandwritingCluster;
+
+  /// Màu mực hiện tại từ Bong bóng công cụ Bút
+  final int selectedColorValue;
+
+  /// Độ dày nét vẽ hiện tại từ Bong bóng công cụ Bút
+  final double selectedStrokeWidth;
+
+  /// Kiểu nét bút hiện tại (`ballpoint`, `fountain`, `marker`, `highlighter`, `dashed`)
+  final String selectedPenStyle;
+
+  /// Đang bật chế độ Cục tẩy trong Bong bóng công cụ Bút hay không
+  final bool isEraserMode;
+
+  /// Callback xóa từ/cụm chữ trên dòng đang chọn khi quẹt tẩy trên bảng viết
+  final VoidCallback? onEraseClusterFromPad;
 
   const PenHandwritingPadWidget({
     super.key,
-    required this.getCurrentRowCleanText,
-    required this.onCommitRecognizedText,
+    this.onCommitRecognizedText,
+    this.preContextProvider,
+    this.onCommitHandwritingCluster,
+    this.selectedColorValue = 0xFF263BAA,
+    this.selectedStrokeWidth = 2.6,
+    this.selectedPenStyle = PenStrokeStyle.ballpoint,
+    this.isEraserMode = false,
+    this.onEraseClusterFromPad,
   });
 
   @override
@@ -42,10 +66,7 @@ class PenHandwritingPadWidget extends StatefulWidget {
 
 class _PenHandwritingPadWidgetState extends State<PenHandwritingPadWidget>
     with SingleTickerProviderStateMixin {
-  final HandwritingRecognitionService _recognitionService =
-      HandwritingRecognitionService.instance;
-
-  /// Thời gian chờ sau khi nhấc bút/chuột để chốt nét vẽ thành chữ lên dòng (650ms)
+  /// Thời gian chờ sau khi nhấc bút/chuột để chốt cụm nét vẽ lên dòng (650ms)
   static const Duration _strokeCommitDelay = Duration(milliseconds: 650);
 
   /// Thời gian ngừng một khoảnh khắc sau khi nét cũ đã ẩn để tự động cách từ mới (650ms)
@@ -56,19 +77,20 @@ class _PenHandwritingPadWidgetState extends State<PenHandwritingPadWidget>
   InkStrokeModel? _currentStroke;
   int? _activePointerId;
   bool _isStylusActive = false;
+  bool _didEraseInCurrentGesture = false;
 
   /// Bộ báo hiệu vẽ lại chỉ riêng lớp mực CustomPainter (0ms lag, không rebuild Widget)
   final ValueNotifier<int> _inkRepaintNotifier = ValueNotifier<int>(0);
 
   /// Trạng thái hiển thị hướng dẫn nhỏ ở góc bảng viết
   final ValueNotifier<String> _statusHintNotifier = ValueNotifier<String>(
-    'Giữ chuột hoặc dùng bút viết lên bảng trắng bên dưới...',
+    'Viết chữ lên bảng bên dưới • Tự động chuyển thành chữ đánh máy lên dòng đang chọn...',
   );
 
   Timer? _commitTimer;
   Timer? _autoSpaceTimer;
 
-  /// Cờ đánh dấu có tự động chèn dấu cách (' ') trước cụm nét đang viết hay không
+  /// Cờ đánh dấu có tự động chèn khoảng cách trước cụm nét đang viết hay không
   bool _insertSpaceBeforeCurrentGroup = false;
 
   /// Đánh dấu đã từng chốt ít nhất 1 cụm chữ trong phiên mở bảng viết này chưa
@@ -76,7 +98,7 @@ class _PenHandwritingPadWidgetState extends State<PenHandwritingPadWidget>
 
   late final AnimationController _fadeOutController = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 160),
+    duration: const Duration(milliseconds: 150),
     value: 1.0,
   )..addListener(() {
       _inkRepaintNotifier.value++;
@@ -87,8 +109,9 @@ class _PenHandwritingPadWidgetState extends State<PenHandwritingPadWidget>
   @override
   void initState() {
     super.initState();
-    // Tải trước model Tiếng Việt ('vi') ngầm ngay khi mở bảng viết bút
-    _recognitionService.ensureModelDownloaded();
+    if (widget.onCommitRecognizedText != null) {
+      HandwritingRecognitionService.instance.ensureModelDownloaded();
+    }
   }
 
   @override
@@ -112,10 +135,29 @@ class _PenHandwritingPadWidgetState extends State<PenHandwritingPadWidget>
       return;
     }
 
+    // Nếu đang bật Cục tẩy trên Bong bóng Bút:
+    if (widget.isEraserMode) {
+      _commitTimer?.cancel();
+      _activePointerId = event.pointer;
+      _didEraseInCurrentGesture = false;
+      if (_activeStrokes.isNotEmpty) {
+        _activeStrokes.clear();
+        _inkRepaintNotifier.value++;
+        _didEraseInCurrentGesture = true;
+        _statusHintNotifier.value = 'Đã tẩy nét đang viết trên bảng...';
+      } else {
+        widget.onEraseClusterFromPad?.call();
+        _didEraseInCurrentGesture = true;
+        _statusHintNotifier.value =
+            'Đã tẩy cụm nét chữ trên dòng đang chọn...';
+      }
+      return;
+    }
+
     _commitTimer?.cancel();
 
     // Nếu nét cũ đang trong quá trình mờ dần (vừa mới chốt xong mà người dùng viết tiếp ngay) ->
-    // Dọn ngay nét cũ và giữ chế độ NỐI LIỀN KÝ TỰ (không cách từ)
+    // Dọn ngay nét cũ và giữ chế độ NỐI LIỀN (không cách từ)
     if (_fadeOutController.isAnimating || _fadeOutController.value < 1.0) {
       _fadeOutController.stop();
       _fadeOutController.value = 1.0;
@@ -123,7 +165,7 @@ class _PenHandwritingPadWidgetState extends State<PenHandwritingPadWidget>
     }
 
     // Nếu người dùng đặt bút viết tiếp TRƯỚC khi bộ đếm nghỉ (_autoSpaceTimer) kết thúc ->
-    // Hủy bộ đếm cách từ để NỐI LIỀN ký tự mới vào từ vừa viết!
+    // Hủy bộ đếm cách từ để xếp cụm nét mới sát vào cụm vừa viết
     if (_autoSpaceTimer != null && _autoSpaceTimer!.isActive) {
       _autoSpaceTimer!.cancel();
       if (_activeStrokes.isEmpty) {
@@ -135,8 +177,11 @@ class _PenHandwritingPadWidgetState extends State<PenHandwritingPadWidget>
     _currentStroke?.finishStroke();
 
     _activePointerId = event.pointer;
-    final InkStrokeModel newStroke = InkStrokeModel()
-      ..addPoint(
+    final InkStrokeModel newStroke = InkStrokeModel(
+      colorValue: widget.selectedColorValue,
+      strokeWidth: widget.selectedStrokeWidth,
+      penStyle: widget.selectedPenStyle,
+    )..addPoint(
         StrokePointModel(
           x: event.localPosition.dx,
           y: event.localPosition.dy,
@@ -148,14 +193,24 @@ class _PenHandwritingPadWidgetState extends State<PenHandwritingPadWidget>
     _activeStrokes.add(newStroke);
 
     _statusHintNotifier.value = _insertSpaceBeforeCurrentGroup
-        ? 'Đang viết từ mới (đã tự cách)...'
-        : 'Đang viết nối liền ký tự...';
+        ? 'Đang viết cụm chữ mới (đã tự cách)...'
+        : 'Đang viết nét chữ (${PenStrokeStyle.getLabel(widget.selectedPenStyle)})...';
 
     _inkRepaintNotifier.value++;
   }
 
   void _onPointerMove(PointerMoveEvent event) {
-    if (event.pointer != _activePointerId || _currentStroke == null) return;
+    if (event.pointer != _activePointerId) return;
+
+    if (widget.isEraserMode) {
+      if (!_didEraseInCurrentGesture) {
+        widget.onEraseClusterFromPad?.call();
+        _didEraseInCurrentGesture = true;
+      }
+      return;
+    }
+
+    if (_currentStroke == null) return;
 
     _currentStroke!.addPoint(
       StrokePointModel(
@@ -171,6 +226,15 @@ class _PenHandwritingPadWidgetState extends State<PenHandwritingPadWidget>
   void _onPointerUpOrCancel(PointerEvent event) {
     if (event.pointer != _activePointerId) return;
 
+    if (widget.isEraserMode) {
+      _activePointerId = null;
+      _didEraseInCurrentGesture = false;
+      if (StylusInputFilter.isHardwareStylus(event)) {
+        _isStylusActive = false;
+      }
+      return;
+    }
+
     _currentStroke?.finishStroke();
     _currentStroke = null;
     _activePointerId = null;
@@ -181,7 +245,7 @@ class _PenHandwritingPadWidgetState extends State<PenHandwritingPadWidget>
 
     // Khởi động bộ đếm chờ 650ms:
     // - Nếu người dùng đặt bút viết tiếp trước 650ms (đánh dấu tiếng Việt / viết chữ kế tiếp) -> gom chung nét.
-    // - Nếu ngừng đủ 650ms -> nhận diện chữ, đẩy lên dòng vở và làm mờ ẩn nét vẽ.
+    // - Nếu ngừng đủ 650ms -> cắt khung bao cụm nét, chuẩn hóa kích cỡ và đẩy lên dòng đang chọn.
     _commitTimer?.cancel();
     _commitTimer = Timer(_strokeCommitDelay, _commitActiveStrokesToRow);
   }
@@ -189,32 +253,54 @@ class _PenHandwritingPadWidgetState extends State<PenHandwritingPadWidget>
   Future<void> _commitActiveStrokesToRow() async {
     if (_activeStrokes.isEmpty || !mounted) return;
 
-    final List<InkStrokeModel> strokesToRecognize =
+    final List<InkStrokeModel> strokesToCommit =
         List<InkStrokeModel>.from(_activeStrokes);
     final bool shouldInsertSpace =
         _hasCommittedAtLeastOnce && _insertSpaceBeforeCurrentGroup;
 
-    final String preContext = widget.getCurrentRowCleanText();
-    final String recognized = await _recognitionService.recognizeStrokes(
-      strokes: strokesToRecognize,
-      preContext: preContext,
-      writingAreaWidth: _padSize.width,
-      writingAreaHeight: _padSize.height,
-    );
-
-    if (!mounted) return;
-
-    if (recognized.isNotEmpty) {
-      widget.onCommitRecognizedText(
-        recognized,
-        insertLeadingSpace: shouldInsertSpace,
+    // 1. Nếu đang dùng chế độ "Nét đánh máy" (onCommitRecognizedText != null):
+    //    Nhận diện nét chữ viết tay thành văn bản Tiếng Việt đánh máy bằng Google ML Kit
+    if (widget.onCommitRecognizedText != null) {
+      _statusHintNotifier.value = 'Đang nhận diện nét chữ thành chữ đánh máy...';
+      final String recognizedText =
+          await HandwritingRecognitionService.instance.recognizeStrokes(
+        strokes: strokesToCommit,
+        preContext: widget.preContextProvider?.call(),
+        writingAreaWidth: _padSize.width,
+        writingAreaHeight: _padSize.height,
       );
-      _hasCommittedAtLeastOnce = true;
+
+      if (recognizedText.isNotEmpty && mounted) {
+        widget.onCommitRecognizedText!(
+          recognizedText,
+          leadingSpace: shouldInsertSpace,
+        );
+        _hasCommittedAtLeastOnce = true;
+      } else if (mounted) {
+        _statusHintNotifier.value =
+            'Chưa nhận diện rõ chữ • Hãy viết rõ nét hơn trên bảng viết...';
+      }
+    } else if (widget.onCommitHandwritingCluster != null) {
+      // 2. Nhánh dự phòng cụm nét vẽ
+      final HandwritingClusterModel? cluster =
+          HandwritingClusterModel.fromInkStrokes(
+        strokesToCommit,
+        padHeight: _padSize.height,
+        leadingSpace: shouldInsertSpace,
+        colorValue: widget.selectedColorValue,
+        strokeWidth: widget.selectedStrokeWidth,
+        penStyle: widget.selectedPenStyle,
+      );
+
+      if (cluster != null && mounted) {
+        widget.onCommitHandwritingCluster!(cluster);
+        _hasCommittedAtLeastOnce = true;
+      }
     }
 
     if (_activePointerId == null &&
-        _activeStrokes.length == strokesToRecognize.length) {
-      // Làm mờ dần nét vẽ trên Bottom Sheet rồi xóa sạch (160ms)
+        _activeStrokes.length == strokesToCommit.length) {
+      // Làm mờ dần nét vẽ trên Bottom Sheet rồi xóa sạch (150ms)
       await _fadeOutController.reverse(from: 1.0);
       if (!mounted) return;
       if (_activePointerId == null) {
@@ -223,23 +309,22 @@ class _PenHandwritingPadWidgetState extends State<PenHandwritingPadWidget>
         _inkRepaintNotifier.value++;
 
         // Bắt đầu đếm nhịp nghỉ sau khi nét đã ẩn:
-        // - Nếu người dùng viết tiếp ngay (< 650ms) -> nối liền vào từ vừa viết
-        // - Nếu ngừng một khoảnh khắc (>= 650ms) -> tự động bật cờ cách từ (' ')
+        // - Nếu người dùng viết tiếp ngay (< 650ms) -> xếp sát cụm vừa viết
+        // - Nếu ngừng một khoảnh khắc (>= 650ms) -> tự động bật cờ cách khoảng trắng
         _insertSpaceBeforeCurrentGroup = false;
         _statusHintNotifier.value =
-            'Viết tiếp ngay để nối liền • Ngừng 1 nhịp để cách từ';
+            'Viết tiếp ngay để nối sát • Ngừng 1 nhịp để cách từ';
 
         _autoSpaceTimer?.cancel();
         _autoSpaceTimer = Timer(_wordSpacePauseDelay, () {
           if (!mounted) return;
           _insertSpaceBeforeCurrentGroup = true;
           _statusHintNotifier.value =
-              'Đã tự động cách từ • Đặt bút để viết từ tiếp theo';
+              'Đã tự động cách chữ • Đặt bút để viết từ tiếp theo';
         });
       }
     } else {
-      // Người dùng đã vẽ đè nét mới ngay lập tức -> xóa các nét cũ đã chốt
-      for (final s in strokesToRecognize) {
+      for (final s in strokesToCommit) {
         _activeStrokes.remove(s);
       }
       _insertSpaceBeforeCurrentGroup = false;
@@ -285,64 +370,22 @@ class _PenHandwritingPadWidgetState extends State<PenHandwritingPadWidget>
               top: 8,
               right: 16,
               child: IgnorePointer(
-                child: Row(
-                  children: [
-                    ValueListenableBuilder<bool>(
-                      valueListenable:
-                          _recognitionService.isDownloadingModelNotifier,
-                      builder: (context, isDownloading, _) {
-                        if (isDownloading) {
-                          return Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 4,
-                            ),
-                            decoration: BoxDecoration(
-                              color: AppColors.creamBackground,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const SizedBox(
-                                  width: 12,
-                                  height: 12,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: AppColors.primaryBlue,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  'Đang tải gói AI nhận diện chữ Tiếng Việt lần đầu (~20MB)...',
-                                  style: TextStyle(
-                                    color: AppColors.primaryBlue,
-                                    fontSize: hintFontSize,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        }
-
-                        return ValueListenableBuilder<String>(
-                          valueListenable: _statusHintNotifier,
-                          builder: (context, statusText, _) {
-                            return Text(
-                              statusText,
-                              style: TextStyle(
-                                color: AppColors.primaryBlue
-                                    .withValues(alpha: 0.55),
-                                fontSize: hintFontSize,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            );
-                          },
-                        );
-                      },
-                    ),
-                  ],
+                child: ValueListenableBuilder<String>(
+                  valueListenable: _statusHintNotifier,
+                  builder: (context, statusText, _) {
+                    return Text(
+                      widget.isEraserMode
+                          ? 'Đang bật Cục tẩy: Chạm vào đây hoặc chạm lên dòng biểu mẫu để xóa cụm chữ viết tay'
+                          : statusText,
+                      style: TextStyle(
+                        color: widget.isEraserMode
+                            ? AppColors.dangerRed
+                            : AppColors.primaryBlue.withValues(alpha: 0.55),
+                        fontSize: hintFontSize,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    );
+                  },
                 ),
               ),
             ),
@@ -389,28 +432,24 @@ class _PenSheetPaperAndInkPainter extends CustomPainter {
       );
     }
 
-    // 2. Vẽ các nét mực của người dùng đậm nét như Paint với hiệu ứng mờ dần khi tự động ẩn
+    // 2. Vẽ các nét mực của người dùng theo đúng Màu chữ, Kiểu nét & Độ dày nét đã chọn trong Bong bóng
     if (strokes.isEmpty) return;
 
     final double opacity = fadeOpacityAnimation.value.clamp(0.0, 1.0);
-    final Paint inkPaint = Paint()
-      ..color = AppColors.primaryBlue.withValues(alpha: opacity)
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..strokeWidth = 4.5;
-
-    final Paint dotPaint = Paint()
-      ..color = AppColors.primaryBlue.withValues(alpha: opacity)
-      ..style = PaintingStyle.fill;
 
     for (final InkStrokeModel stroke in strokes) {
-      if (stroke.points.length == 1) {
-        final StrokePointModel pt = stroke.points.first;
-        canvas.drawCircle(Offset(pt.x, pt.y), 2.5, dotPaint);
-      } else if (stroke.points.length > 1) {
-        canvas.drawPath(stroke.path, inkPaint);
-      }
+      if (stroke.points.isEmpty) continue;
+      final List<Offset> scaledPts = stroke.points
+          .map((StrokePointModel pt) => Offset(pt.x, pt.y))
+          .toList(growable: false);
+      PenStrokeStyle.paintScaledPoints(
+        canvas,
+        scaledPts,
+        colorValue: stroke.colorValue,
+        strokeWidth: (stroke.strokeWidth * 1.45).clamp(2.0, 9.5),
+        penStyle: stroke.penStyle,
+        opacityMultiplier: opacity,
+      );
     }
   }
 
