@@ -5,6 +5,7 @@ import '../../../widgets/create_note_dialog.dart';
 import '../../../widgets/create_observation_book_dialog.dart';
 import '../../../widgets/user_profile_dialog.dart';
 import '../../auth/service/auth_service.dart';
+import '../views/user_guide_screen.dart';
 import '../views/widgets/create_item_bottom_sheet.dart';
 
 // ===========================================================================
@@ -50,6 +51,15 @@ class HomeService {
       onLogoutPressed: () {
         _authService.handleLogout(context);
       },
+    );
+  }
+
+  /// Hàm mở màn hình Hướng dẫn sử dụng từ Sidebar bên trái
+  void openUserGuideScreen(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const UserGuideScreen(),
+      ),
     );
   }
 
@@ -122,11 +132,13 @@ class HomeService {
   }
 
   /// Xử lý logic khi người dùng nhập từ khóa tìm kiếm trên thanh Header
+  /// (Đồng bộ từ khóa cho cả 2 Tab Ghi chú & Sổ dự giờ để khi chuyển Tab vẫn lọc chuẩn xác)
   void handleSearchChanged(String keyword, int currentTabIndex) {
-    if (currentTabIndex == 0) {
-      _driveDatasource.notesSearchKeywordNotifier.value = keyword;
-    } else {
-      _driveDatasource.observationSearchKeywordNotifier.value = keyword;
-    }
+    _driveDatasource.notesSearchKeywordNotifier.value = keyword;
+    _driveDatasource.observationSearchKeywordNotifier.value = keyword;
   }
+
+  /// Lắng nghe từ khóa tìm kiếm hiện tại trên GoogleDriveDatasource
+  ValueNotifier<String> get searchKeywordNotifier =>
+      _driveDatasource.notesSearchKeywordNotifier;
 }

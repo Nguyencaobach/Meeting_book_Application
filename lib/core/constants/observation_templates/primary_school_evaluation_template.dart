@@ -1,6 +1,57 @@
 import 'package:flutter/material.dart';
+import '../../../data/models/stroke_point_model.dart';
 import '../../theme/app_theme.dart';
 import '../app_colors.dart';
+
+// ===========================================================================
+// MODEL THÔNG TIN BỐ CỤC ĐO ĐẠC THỰC TẾ CỦA 3 TRANG BIỂU MẪU & Ô CHỮ KÝ
+// Công dụng:
+// - Lưu tọa độ chuẩn hóa thực tế (startRy..endRy, sigStartNx..sigEndNx, sigStartRy..sigEndRy)
+//   của Trang 1, Trang 2, Trang 3 và vùng ký tên Người dự giờ trên màn hình ứng dụng.
+// - Giúp khi xuất PDF và Word, chữ ký và các nét vẽ bút tự do luôn khớp đúng 100%
+//   vị trí giống như trên giao diện ứng dụng, không bị bay lệch sang vùng khác.
+// ===========================================================================
+class EvaluationExportLayoutBounds {
+  final double page1StartRy;
+  final double page1EndRy;
+  final double page2StartRy;
+  final double page2EndRy;
+  final double page3StartRy;
+  final double page3EndRy;
+  final double sigStartNx;
+  final double sigEndNx;
+  final double sigStartRy;
+  final double sigEndRy;
+
+  const EvaluationExportLayoutBounds({
+    this.page1StartRy = 1.4,
+    this.page1EndRy = 33.4,
+    this.page2StartRy = 36.2,
+    this.page2EndRy = 65.5,
+    this.page3StartRy = 68.2,
+    this.page3EndRy = 81.2,
+    this.sigStartNx = 0.43,
+    this.sigEndNx = 0.97,
+    this.sigStartRy = 76.8,
+    this.sigEndRy = 79.8,
+  });
+
+  /// Kiểm tra xem một nét vẽ tự do có nằm trong khu vực chữ ký Người dự giờ ở Trang 3 không
+  bool isSignatureStroke(FreehandPageStrokeModel stroke) {
+    if (stroke.points.isEmpty) return false;
+    double sumNx = 0.0;
+    double sumRy = 0.0;
+    for (final StrokePointModel pt in stroke.points) {
+      sumNx += pt.nx;
+      sumRy += pt.ry;
+    }
+    final double avgNx = sumNx / stroke.points.length;
+    final double avgRy = sumRy / stroke.points.length;
+    return avgNx >= (sigStartNx - 0.14) &&
+        avgRy >= (sigStartRy - 2.2) &&
+        avgRy <= (page3EndRy + 2.5);
+  }
+}
 
 // ===========================================================================
 // MODEL THÔNG TIN MỘT BIỂU MẪU SỔ DỰ GIỜ ĐỂ HIỂN THỊ TRONG DANH SÁCH CHỌN
@@ -603,6 +654,10 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
   final ObservationInteractiveFieldBuilder buildInteractiveField;
   final String Function(int rowIndex) getRowCleanText;
   final VoidCallback onApplySuggestedRating;
+  final GlobalKey? page1ContentKey;
+  final GlobalKey? page2ContentKey;
+  final GlobalKey? page3ContentKey;
+  final GlobalKey? signatureBoxKey;
 
   const PrimarySchoolEvaluationFormWidget({
     super.key,
@@ -612,6 +667,10 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
     required this.buildInteractiveField,
     required this.getRowCleanText,
     required this.onApplySuggestedRating,
+    this.page1ContentKey,
+    this.page2ContentKey,
+    this.page3ContentKey,
+    this.signatureBoxKey,
   });
 
   @override
@@ -662,19 +721,25 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
             pageLabel: 'Trang 1 / 3 — Ghi chép tiến trình tiết dạy',
           ),
           const SizedBox(height: 12),
-          _buildPage1HeaderAndInfo(
-            innerWidth: innerWidth,
-            labelStyle: labelStyle,
-            boldStyle: boldStyle,
-            inputTextStyle: inputTextStyle,
-            titleFontSize: titleFontSize,
-            smallFontSize: smallFontSize,
-          ),
-          const SizedBox(height: 14),
-          _buildPage1ThreeColumnTable(
-            innerWidth: innerWidth,
-            boldStyle: boldStyle,
-            inputTextStyle: inputTextStyle,
+          Column(
+            key: page1ContentKey,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildPage1HeaderAndInfo(
+                innerWidth: innerWidth,
+                labelStyle: labelStyle,
+                boldStyle: boldStyle,
+                inputTextStyle: inputTextStyle,
+                titleFontSize: titleFontSize,
+                smallFontSize: smallFontSize,
+              ),
+              const SizedBox(height: 14),
+              _buildPage1ThreeColumnTable(
+                innerWidth: innerWidth,
+                boldStyle: boldStyle,
+                inputTextStyle: inputTextStyle,
+              ),
+            ],
           ),
 
           const SizedBox(height: 32),
@@ -689,20 +754,26 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
             pageLabel: 'Trang 2 / 3 — Nhận xét chung & Thang điểm tiêu chí',
           ),
           const SizedBox(height: 12),
-          _buildPage2GeneralComments(
-            innerWidth: innerWidth,
-            boldStyle: boldStyle,
-            inputTextStyle: inputTextStyle,
-          ),
-          const SizedBox(height: 18),
-          _buildPage2EvaluationTable(
-            innerWidth: innerWidth,
-            labelStyle: labelStyle,
-            boldStyle: boldStyle,
-            inputTextStyle: inputTextStyle,
-            smallFontSize: smallFontSize,
-            totalScore: scoreEval.totalScore,
-            enteredScoreCount: scoreEval.enteredCount,
+          Column(
+            key: page2ContentKey,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildPage2GeneralComments(
+                innerWidth: innerWidth,
+                boldStyle: boldStyle,
+                inputTextStyle: inputTextStyle,
+              ),
+              const SizedBox(height: 18),
+              _buildPage2EvaluationTable(
+                innerWidth: innerWidth,
+                labelStyle: labelStyle,
+                boldStyle: boldStyle,
+                inputTextStyle: inputTextStyle,
+                smallFontSize: smallFontSize,
+                totalScore: scoreEval.totalScore,
+                enteredScoreCount: scoreEval.enteredCount,
+              ),
+            ],
           ),
 
           const SizedBox(height: 32),
@@ -717,13 +788,16 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
             pageLabel: 'Trang 3 / 3 — Xếp loại tiết dạy & Ký tên',
           ),
           const SizedBox(height: 14),
-          _buildPage3RatingAndSignature(
-            innerWidth: innerWidth,
-            labelStyle: labelStyle,
-            boldStyle: boldStyle,
-            italicStyle: italicStyle,
-            inputTextStyle: inputTextStyle,
-            suggestedRating: scoreEval.suggestedRating,
+          Container(
+            key: page3ContentKey,
+            child: _buildPage3RatingAndSignature(
+              innerWidth: innerWidth,
+              labelStyle: labelStyle,
+              boldStyle: boldStyle,
+              italicStyle: italicStyle,
+              inputTextStyle: inputTextStyle,
+              suggestedRating: scoreEval.suggestedRating,
+            ),
           ),
           const SizedBox(height: 36),
         ],
@@ -1921,7 +1995,11 @@ class PrimarySchoolEvaluationFormWidget extends StatelessWidget {
                   style: italicStyle,
                 ),
                 // Giãn khoảng trống rộng rãi để chừa chỗ ký tên trước dòng Họ tên người dự giờ
-                SizedBox(height: (rowHeight * 2.5).clamp(80.0, 110.0)),
+                SizedBox(
+                  key: signatureBoxKey,
+                  width: double.infinity,
+                  height: (rowHeight * 2.5).clamp(80.0, 110.0),
+                ),
                 // Dòng nhập họ tên người dự giờ
                 SizedBox(
                   width: 256,

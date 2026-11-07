@@ -28,6 +28,7 @@ class WordExportService {
   static Uint8List generateWordBytes({
     required NotebookModel notebook,
     required int tabIndex,
+    EvaluationExportLayoutBounds? evalLayoutBounds,
   }) {
     final Map<int, String> rowMap = _extractRowTextMap(notebook);
     final Map<int, List<HandwritingClusterModel>> clusterMap =
@@ -47,6 +48,7 @@ class WordExportService {
             rowMap: rowMap,
             clusterMap: clusterMap,
             freehandStrokes: freehandStrokes,
+            bounds: evalLayoutBounds ?? const EvaluationExportLayoutBounds(),
           )
         : _buildNoteRuledWordHtml(
             notebook: notebook,
@@ -150,6 +152,122 @@ class WordExportService {
     return text.isEmpty ? svgHtml : '$text $svgHtml';
   }
 
+  /// Tạo chuỗi HTML cho ô chữ ký giữa "(Ký, ghi rõ họ tên)" và "Họ tên người dự giờ" trong Word
+  /// - Nếu không ký bằng bút: chừa 4 dòng trống không bị gộp (84pt) để giữ nguyên khoảng cách ký tên.
+  /// - Nếu có ký bằng bút: nhúng trực tiếp SVG chữ ký vào đúng giữa "(Ký, ghi rõ họ tên)" và họ tên người dự giờ.
+  static String _buildWordSignatureBoxHtml({
+    required List<FreehandPageStrokeModel> signatureStrokes,
+    required EvaluationExportLayoutBounds bounds,
+  }) {
+    if (signatureStrokes.isEmpty) {
+      return '''
+        <p style="margin: 0; line-height: 21pt;">&nbsp;</p>
+        <p style="margin: 0; line-height: 21pt;">&nbsp;</p>
+        <p style="margin: 0; line-height: 21pt;">&nbsp;</p>
+        <p style="margin: 0; line-height: 21pt;">&nbsp;</p>''';
+    }
+
+    double minNx = bounds.sigStartNx;
+    double maxNx = bounds.sigEndNx;
+    double minRy = bounds.sigStartRy;
+    double maxRy = bounds.sigEndRy;
+
+    for (final FreehandPageStrokeModel s in signatureStrokes) {
+      for (final StrokePointModel p in s.points) {
+        if (p.nx < minNx) minNx = p.nx;
+        if (p.nx > maxNx) maxNx = p.nx;
+        if (p.ry < minRy) minRy = p.ry;
+        if (p.ry > maxRy) maxRy = p.ry;
+      }
+    }
+
+    final double spanNx = math.max(0.08, maxNx - minNx);
+    final double spanRy = math.max(0.5, maxRy - minRy);
+    const int svgW = 260;
+    const int svgH = 85;
+
+    final StringBuffer polySb = StringBuffer();
+    for (final FreehandPageStrokeModel stroke in signatureStrokes) {
+      if (stroke.points.isEmpty) continue;
+      final String hexColor = _toCssHexColor(stroke.colorValue);
+      final double svgStrokeW =
+          ((stroke.strokeWidth / 2.6) * 1.65).clamp(1.0, 4.2) *
+              (stroke.penStyle == PenStrokeStyle.highlighter ? 2.4 : 1.0);
+      final String extraSvgAttrs =
+          stroke.penStyle == PenStrokeStyle.highlighter
+              ? ' stroke-opacity="0.35"'
+              : (stroke.penStyle == PenStrokeStyle.dashed
+                  ? ' stroke-dasharray="5,4"'
+                  : '');
+      final String pointsAttr = stroke.points
+          .map((StrokePointModel p) {
+            final double x =
+                ((p.nx - minNx) / spanNx).clamp(0.02, 0.98) * svgW;
+            final double y =
+                ((p.ry - minRy) / spanRy).clamp(0.02, 0.98) * svgH;
+            return '${x.toStringAsFixed(1)},${y.toStringAsFixed(1)}';
+          })
+          .join(' ');
+      polySb.write(
+        '<polyline fill="none" stroke="$hexColor" stroke-width="${svgStrokeW.toStringAsFixed(1)}"$extraSvgAttrs stroke-linecap="round" stroke-linejoin="round" points="$pointsAttr" />',
+      );
+    }
+
+    return '''
+        <div style="margin: 4pt auto; text-align: center; min-height: 85pt;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="$svgW" height="$svgH" viewBox="0 0 $svgW $svgH" style="vertical-align: middle; display: inline-block;">${polySb.toString()}</svg>
+        </div>''';
+  }
+
+  /// Tạo SVG lớp nét vẽ tự do (ngoài chữ ký) theo từng trang cụ thể
+  static String _buildWordPageFreehandOverlaySvg({
+    required List<FreehandPageStrokeModel> strokes,
+    required double startRy,
+    required double endRy,
+    required double targetHeightPx,
+  }) {
+    final List<FreehandPageStrokeModel> pageStrokes = strokes
+        .where(
+          (FreehandPageStrokeModel s) =>
+              s.points.any((StrokePointModel p) => p.ry >= startRy && p.ry <= endRy),
+        )
+        .toList();
+    if (pageStrokes.isEmpty) return '';
+
+    const double pageWidthPx = 660.0;
+    final double spanRy = math.max(1.0, endRy - startRy);
+    final StringBuffer sb = StringBuffer();
+    sb.write(
+      '  <svg xmlns="http://www.w3.org/2000/svg" width="${pageWidthPx.toInt()}" height="${targetHeightPx.toInt()}" viewBox="0 0 ${pageWidthPx.toInt()} ${targetHeightPx.toInt()}" style="position: absolute; top: 0; left: 0; pointer-events: none;">\n',
+    );
+    for (final FreehandPageStrokeModel stroke in pageStrokes) {
+      if (stroke.points.isEmpty) continue;
+      final String hexColor = _toCssHexColor(stroke.colorValue);
+      final double svgStrokeW =
+          ((stroke.strokeWidth / 2.6) * 1.8).clamp(1.0, 4.5) *
+              (stroke.penStyle == PenStrokeStyle.highlighter ? 2.4 : 1.0);
+      final String extraSvgAttrs =
+          stroke.penStyle == PenStrokeStyle.highlighter
+              ? ' stroke-opacity="0.35"'
+              : (stroke.penStyle == PenStrokeStyle.dashed
+                  ? ' stroke-dasharray="5,4"'
+                  : '');
+      final String pointsAttr = stroke.points
+          .map((StrokePointModel p) {
+            final double x = (p.nx * pageWidthPx).clamp(0.0, pageWidthPx);
+            final double y = (((p.ry - startRy) / spanRy) * targetHeightPx)
+                .clamp(0.0, targetHeightPx);
+            return '${x.toStringAsFixed(1)},${y.toStringAsFixed(1)}';
+          })
+          .join(' ');
+      sb.write(
+        '    <polyline fill="none" stroke="$hexColor" stroke-width="${svgStrokeW.toStringAsFixed(1)}"$extraSvgAttrs stroke-linecap="round" stroke-linejoin="round" points="$pointsAttr" />\n',
+      );
+    }
+    sb.write('  </svg>\n');
+    return sb.toString();
+  }
+
   // ===========================================================================
   // 1. KẾT XUẤT WORD 3 TRANG "PHIẾU ĐÁNH GIÁ TIẾT DẠY GIÁO VIÊN CẤP TIỂU HỌC"
   // ===========================================================================
@@ -158,6 +276,7 @@ class WordExportService {
     required Map<int, String> rowMap,
     required Map<int, List<HandwritingClusterModel>> clusterMap,
     required List<FreehandPageStrokeModel> freehandStrokes,
+    required EvaluationExportLayoutBounds bounds,
   }) {
     String getRowText(int rowIndex) => rowMap[rowIndex] ?? '';
     String getRowHtml(int rowIndex, {double svgHeight = 19.0}) =>
@@ -169,6 +288,13 @@ class WordExportService {
         );
     final scoreEval =
         PrimarySchoolEvaluationTemplate.evaluateScores(getRowText);
+
+    final List<FreehandPageStrokeModel> signatureStrokes = freehandStrokes
+        .where((FreehandPageStrokeModel s) => bounds.isSignatureStroke(s))
+        .toList();
+    final List<FreehandPageStrokeModel> nonSignatureStrokes = freehandStrokes
+        .where((FreehandPageStrokeModel s) => !bounds.isSignatureStroke(s))
+        .toList();
 
     final String teacherName =
         getRowHtml(PrimarySchoolEvaluationTemplate.rowTeacherName);
@@ -367,11 +493,18 @@ class WordExportService {
 ''');
     }
 
-    sb.write('''
-  </table>
-
-  <br clear="all" style="page-break-before:always" />
-''');
+    sb.write('  </table>\n');
+    if (nonSignatureStrokes.isNotEmpty) {
+      sb.write(
+        _buildWordPageFreehandOverlaySvg(
+          strokes: nonSignatureStrokes,
+          startRy: bounds.page1StartRy,
+          endRy: bounds.page1EndRy,
+          targetHeightPx: 920.0,
+        ),
+      );
+    }
+    sb.write('  <br clear="all" style="page-break-before:always" />\n');
 
     // -------------------------------------------------------------------------
     // TRANG 2: NHẬN XÉT CHUNG & BẢNG THANG ĐIỂM 12 TIÊU CHÍ
@@ -444,9 +577,18 @@ class WordExportService {
       <td style="border: 1pt solid #000000; text-align: center; font-weight: bold; color: #1A237E;">$totalScoreText</td>
     </tr>
   </table>
-
-  <br clear="all" style="page-break-before:always" />
 ''');
+    if (nonSignatureStrokes.isNotEmpty) {
+      sb.write(
+        _buildWordPageFreehandOverlaySvg(
+          strokes: nonSignatureStrokes,
+          startRy: bounds.page2StartRy,
+          endRy: bounds.page2EndRy,
+          targetHeightPx: 880.0,
+        ),
+      );
+    }
+    sb.write('  <br clear="all" style="page-break-before:always" />\n');
 
     // -------------------------------------------------------------------------
     // TRANG 3: QUY ĐỊNH ĐIỂM ĐÁNH GIÁ, XẾP LOẠI & CHỮ KÝ NGƯỜI DỰ GIỜ
@@ -465,6 +607,11 @@ class WordExportService {
     final String observerName = getRowHtml(
       PrimarySchoolEvaluationTemplate.rowObserverName,
       svgHeight: 24.0,
+    );
+
+    final String signatureBoxHtml = _buildWordSignatureBoxHtml(
+      signatureStrokes: signatureStrokes,
+      bounds: bounds,
     );
 
     sb.write('''
@@ -489,58 +636,29 @@ class WordExportService {
 
   <table style="border: none; width: 100%;">
     <tr>
-      <td style="border: none; width: 45%;"></td>
-      <td style="border: none; width: 55%; text-align: center;">
+      <td style="border: none; width: 44%;"></td>
+      <td style="border: none; width: 56%; text-align: center;">
         <div style="font-style: italic;">
           Đức Lập, ngày ${signDay.isEmpty ? '...' : signDay} tháng ${signMonth.isEmpty ? '...' : signMonth} năm ${signYear.isEmpty ? '...' : signYear}
         </div>
-        <div style="margin-top: 4pt;">Người dự giờ</div>
+        <div style="margin-top: 4pt; font-weight: bold;">Người dự giờ</div>
         <div style="font-style: italic;">(Ký, ghi rõ họ tên)</div>
-        <div style="height: 75pt;"></div>
-        <div style="font-weight: bold;">$observerName</div>
+$signatureBoxHtml
+        <div style="font-weight: bold; color: #1A237E; min-height: 18pt; width: 190pt; margin: 0 auto; border-bottom: 1pt dotted #666666; padding-bottom: 2pt;">${observerName.isEmpty ? '&nbsp;' : observerName}</div>
       </td>
     </tr>
   </table>
 ''');
 
-    if (freehandStrokes.isNotEmpty) {
-      const double evalPageWidthPx = 660.0;
-      const double evalRowHeightPx = 28.0;
-      double maxRy = 108.0;
-      for (final FreehandPageStrokeModel stroke in freehandStrokes) {
-        for (final StrokePointModel p in stroke.points) {
-          if (p.ry + 2.0 > maxRy) {
-            maxRy = p.ry + 2.0;
-          }
-        }
-      }
-      final double totalEvalHeightPx = maxRy * evalRowHeightPx;
+    if (nonSignatureStrokes.isNotEmpty) {
       sb.write(
-        '  <svg xmlns="http://www.w3.org/2000/svg" width="${evalPageWidthPx.toInt()}" height="${totalEvalHeightPx.toInt()}" viewBox="0 0 ${evalPageWidthPx.toInt()} ${totalEvalHeightPx.toInt()}" style="position: absolute; top: 0; left: 0; pointer-events: none;">\n',
+        _buildWordPageFreehandOverlaySvg(
+          strokes: nonSignatureStrokes,
+          startRy: bounds.page3StartRy,
+          endRy: bounds.page3EndRy,
+          targetHeightPx: 420.0,
+        ),
       );
-      for (final FreehandPageStrokeModel stroke in freehandStrokes) {
-        if (stroke.points.isEmpty) continue;
-        final String hexColor = _toCssHexColor(stroke.colorValue);
-        final double svgStrokeW =
-            ((stroke.strokeWidth / 2.6) * 1.8).clamp(1.0, 4.5) *
-                (stroke.penStyle == PenStrokeStyle.highlighter ? 2.4 : 1.0);
-        final String extraSvgAttrs =
-            stroke.penStyle == PenStrokeStyle.highlighter
-                ? ' stroke-opacity="0.35"'
-                : (stroke.penStyle == PenStrokeStyle.dashed
-                    ? ' stroke-dasharray="5,4"'
-                    : '');
-        final String pointsAttr = stroke.points
-            .map(
-              (StrokePointModel p) =>
-                  '${(p.x * evalPageWidthPx).toStringAsFixed(1)},${(p.y * evalRowHeightPx).toStringAsFixed(1)}',
-            )
-            .join(' ');
-        sb.write(
-          '    <polyline fill="none" stroke="$hexColor" stroke-width="${svgStrokeW.toStringAsFixed(1)}"$extraSvgAttrs stroke-linecap="round" stroke-linejoin="round" points="$pointsAttr" />\n',
-        );
-      }
-      sb.write('  </svg>\n');
     }
 
     sb.write('''

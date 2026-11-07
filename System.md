@@ -168,11 +168,13 @@ lib/
     │   ├── controllers/
     │   │   └── home_controller.dart         # Quản lý trạng thái điều khiển màn hình Home
     │   ├── service/
-    │   │   └── home_service.dart            # Xử lý tìm kiếm theo Tab, mở thông tin User, mở Bottom Sheet tạo Thư mục / Ghi chú / Sổ dự giờ
+    │   │   └── home_service.dart            # Xử lý tìm kiếm theo Tab, mở thông tin User, mở Hướng dẫn sử dụng & mở Bottom Sheet tạo Thư mục / Ghi chú / Sổ dự giờ
     │   └── views/
-    │       ├── home_screen.dart             # Giao diện chính của màn hình Home (Header + TabBarView + Nút nổi '+' + Footer)
+    │       ├── home_screen.dart             # Giao diện chính của màn hình Home (Header + Sidebar trái + TabBarView + Nút nổi '+' + Footer)
+    │       ├── user_guide_screen.dart       # Màn hình Hướng dẫn sử dụng trình bày văn bản ngắn gọn, dễ đọc theo 7 phần
     │       └── widgets/
-    │           └── create_item_bottom_sheet.dart # Bottom Sheet trượt lên khi bấm nút (+) để chọn Tạo tệp mới hoặc Tạo thư mục mới
+    │           ├── create_item_bottom_sheet.dart # Bottom Sheet trượt lên khi bấm nút (+) để chọn Tạo tệp mới hoặc Tạo thư mục mới
+    │           └── home_sidebar_drawer.dart # Sidebar trượt từ bên trái tầm nửa màn hình khi bấm nút menu 3 gạch trên thanh tìm kiếm
     │
     ├── notes/                               # Tab 1: Mô-đun Ghi chú & Trình soạn thảo Trang vở / Biểu mẫu
     │   ├── controllers/
@@ -260,7 +262,7 @@ Chứa các giá trị bất biến, thông số dòng kẻ và hàm tính toán
 * **`features/auth/`**:
   * **`service/auth_service.dart`** & **`views/login_screen.dart`**: Kiểm tra mạng, đăng nhập tài khoản Google, cấp quyền Google Drive và đăng xuất.
 * **`features/home/`**:
-  * **`service/home_service.dart`**, **`controllers/home_controller.dart`**, **`views/home_screen.dart`** & **`views/widgets/create_item_bottom_sheet.dart`**: Quản lý màn hình chính, tìm kiếm theo Tab và mở Bottom Sheet tạo mới (Ghi chú mới, Sổ dự giờ mới, Thư mục mới) khi bấm nút `+`.
+  * **`service/home_service.dart`**, **`controllers/home_controller.dart`**, **`views/home_screen.dart`**, **`views/user_guide_screen.dart`**, **`views/widgets/home_sidebar_drawer.dart`** & **`views/widgets/create_item_bottom_sheet.dart`**: Quản lý màn hình chính, tìm kiếm theo Tab, mở Sidebar trượt từ bên trái tầm nửa màn hình khi bấm nút menu 3 gạch (chứa mục **Hướng dẫn sử dụng** mở màn hình hướng dẫn văn bản ngắn gọn, dễ đọc), và mở Bottom Sheet tạo mới (Ghi chú mới, Sổ dự giờ mới, Thư mục mới) khi bấm nút `+`.
 * **`features/notes/`**:
   * **`views/notes_screen.dart`**: Hiển thị cây thư mục và các tệp ghi chú trong Tab Ghi chú; bấm vào thư mục để đi sâu vào trong, bấm vào tệp để mở trang vở.
   * **`views/note_editor_screen.dart`**: Màn hình soạn thảo trang vở & biểu mẫu thông minh:

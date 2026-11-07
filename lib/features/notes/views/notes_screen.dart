@@ -34,6 +34,7 @@ class NotesScreen extends StatelessWidget {
           },
           child: DriveFolderSectionWidget(
             foldersListenable: driveDatasource.notesFoldersNotifier,
+            allTabItemsListenable: driveDatasource.allNotesItemsNotifier,
             activeFolderListenable: driveDatasource.activeNotesFolderNotifier,
             searchKeywordListenable: driveDatasource.notesSearchKeywordNotifier,
             onRefresh: () => driveDatasource.refreshCurrentNotesView(),

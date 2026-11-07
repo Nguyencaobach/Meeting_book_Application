@@ -73,6 +73,7 @@ class PdfExportService {
   static Future<Uint8List> generatePdfBytes({
     required NotebookModel notebook,
     required int tabIndex,
+    EvaluationExportLayoutBounds? evalLayoutBounds,
   }) async {
     final fonts = await _getOrLoadFontsInRam();
     final pw.Font regularFont = fonts.regular;
@@ -111,6 +112,7 @@ class PdfExportService {
         rowMap: rowMap,
         clusterMap: clusterMap,
         freehandStrokes: freehandStrokes,
+        bounds: evalLayoutBounds ?? const EvaluationExportLayoutBounds(),
         regularFont: regularFont,
         mediumFont: mediumFont,
         boldFont: boldFont,
@@ -360,11 +362,97 @@ class PdfExportService {
     );
   }
 
+  /// Vẽ các nét bút chữ ký trực tiếp vào đúng ô chữ ký giữa "(Ký, ghi rõ họ tên)" và "Họ tên người dự giờ"
+  static pw.Widget _buildPdfSignatureBoxCanvas({
+    required List<FreehandPageStrokeModel> signatureStrokes,
+    required EvaluationExportLayoutBounds bounds,
+  }) {
+    if (signatureStrokes.isEmpty) {
+      return pw.SizedBox(height: 85);
+    }
+
+    double minNx = bounds.sigStartNx;
+    double maxNx = bounds.sigEndNx;
+    double minRy = bounds.sigStartRy;
+    double maxRy = bounds.sigEndRy;
+
+    for (final FreehandPageStrokeModel s in signatureStrokes) {
+      for (final StrokePointModel p in s.points) {
+        if (p.nx < minNx) minNx = p.nx;
+        if (p.nx > maxNx) maxNx = p.nx;
+        if (p.ry < minRy) minRy = p.ry;
+        if (p.ry > maxRy) maxRy = p.ry;
+      }
+    }
+
+    final double spanNx = math.max(0.08, maxNx - minNx);
+    final double spanRy = math.max(0.5, maxRy - minRy);
+
+    return pw.SizedBox(
+      width: double.infinity,
+      height: 85,
+      child: pw.CustomPaint(
+        painter: (PdfGraphics canvas, PdfPoint size) {
+          for (final FreehandPageStrokeModel stroke in signatureStrokes) {
+            final List<StrokePointModel> pts = stroke.points;
+            if (pts.isEmpty) continue;
+
+            final PdfColor strokePdfColor =
+                PdfColor.fromInt(stroke.colorValue);
+            final double pdfLineW =
+                ((stroke.strokeWidth / 2.6) * 1.25).clamp(0.8, 3.8) *
+                    (stroke.penStyle == PenStrokeStyle.highlighter
+                        ? 2.4
+                        : 1.0);
+            canvas
+              ..saveContext()
+              ..setStrokeColor(strokePdfColor)
+              ..setFillColor(strokePdfColor)
+              ..setLineWidth(pdfLineW)
+              ..setLineCap(PdfLineCap.round)
+              ..setLineJoin(PdfLineJoin.round);
+            if (stroke.penStyle == PenStrokeStyle.dashed) {
+              canvas.setLineDashPattern(<int>[4, 3]);
+            }
+
+            if (pts.length == 1) {
+              final double x =
+                  ((pts.first.nx - minNx) / spanNx).clamp(0.02, 0.98) * size.x;
+              final double y = size.y *
+                  (1.0 - ((pts.first.ry - minRy) / spanRy).clamp(0.02, 0.98));
+              canvas
+                ..drawEllipse(x, y, 0.85, 0.85)
+                ..fillPath()
+                ..restoreContext();
+              continue;
+            }
+
+            for (int i = 0; i < pts.length; i++) {
+              final double x =
+                  ((pts[i].nx - minNx) / spanNx).clamp(0.01, 0.99) * size.x;
+              final double y = size.y *
+                  (1.0 - ((pts[i].ry - minRy) / spanRy).clamp(0.01, 0.99));
+              if (i == 0) {
+                canvas.moveTo(x, y);
+              } else {
+                canvas.lineTo(x, y);
+              }
+            }
+            canvas
+              ..strokePath()
+              ..restoreContext();
+          }
+        },
+      ),
+    );
+  }
+
   static void _buildPrimarySchoolEvaluationPdfPages({
     required pw.Document pdf,
     required Map<int, String> rowMap,
     required Map<int, List<HandwritingClusterModel>> clusterMap,
     required List<FreehandPageStrokeModel> freehandStrokes,
+    required EvaluationExportLayoutBounds bounds,
     required pw.Font regularFont,
     required pw.Font mediumFont,
     required pw.Font boldFont,
@@ -373,6 +461,14 @@ class PdfExportService {
     String getRowText(int rowIndex) => rowMap[rowIndex] ?? '';
     List<HandwritingClusterModel> getRowClusters(int rowIndex) =>
         clusterMap[rowIndex] ?? const <HandwritingClusterModel>[];
+
+    // Tách riêng các nét chữ ký ở vùng ký tên Người dự giờ và các nét vẽ tự do khác trên 3 trang
+    final List<FreehandPageStrokeModel> signatureStrokes = freehandStrokes
+        .where((FreehandPageStrokeModel s) => bounds.isSignatureStroke(s))
+        .toList();
+    final List<FreehandPageStrokeModel> nonSignatureStrokes = freehandStrokes
+        .where((FreehandPageStrokeModel s) => !bounds.isSignatureStroke(s))
+        .toList();
 
     final scoreEval =
         PrimarySchoolEvaluationTemplate.evaluateScores(getRowText);
@@ -417,9 +513,9 @@ class PdfExportService {
         ),
         build: (pw.Context context) {
           return _wrapPdfPageWithFreehandOverlay(
-            freehandStrokes: freehandStrokes,
-            startRy: 0.0,
-            endRy: 36.0,
+            freehandStrokes: nonSignatureStrokes,
+            startRy: bounds.page1StartRy,
+            endRy: bounds.page1EndRy,
             child: pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.stretch,
               children: [
@@ -799,9 +895,9 @@ class PdfExportService {
           );
 
           return _wrapPdfPageWithFreehandOverlay(
-            freehandStrokes: freehandStrokes,
-            startRy: 36.0,
-            endRy: 72.0,
+            freehandStrokes: nonSignatureStrokes,
+            startRy: bounds.page2StartRy,
+            endRy: bounds.page2EndRy,
             child: pw.Column(
               crossAxisAlignment: pw.CrossAxisAlignment.stretch,
               children: [
@@ -1070,153 +1166,179 @@ class PdfExportService {
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.fromLTRB(38, 36, 38, 36),
         build: (pw.Context context) {
-          return _wrapPdfPageWithFreehandOverlay(
-            freehandStrokes: freehandStrokes,
-            startRy: 72.0,
-            endRy: 108.0,
-            child: pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-              children: [
-              pw.Text('ĐIỂM ĐÁNH GIÁ TIẾT DẠY', style: boldStyle),
-              pw.SizedBox(height: 8),
-              _buildPdfRatingRule(
-                title: '1. Loại Giỏi: ',
-                body:
-                    'Tổng điểm từ 18,0 đến 20,0 điểm. Trong đó Tiêu chí 2.1 đến 3.4 đạt từ 1,5 điểm trở lên. Các tiêu chí còn lại không có tiêu chí nào dưới 1/2 điểm tối đa.',
-                baseStyle: baseStyle,
-                boldStyle: boldStyle,
-              ),
-              pw.SizedBox(height: 6),
-              _buildPdfRatingRule(
-                title: '2. Loại Khá: ',
-                body:
-                    'Tổng điểm từ 13,5 đến dưới 18,0 điểm. Trong đó Tiêu chí 2.1 đến 3.4 đạt từ 1,5 điểm trở lên. Các tiêu chí còn lại không có tiêu chí nào dưới 1/2 điểm tối đa.',
-                baseStyle: baseStyle,
-                boldStyle: boldStyle,
-              ),
-              pw.SizedBox(height: 6),
-              _buildPdfRatingRule(
-                title: '3. Loại Trung bình: ',
-                body: 'Tổng điểm từ 10,0 đến dưới 13,5 điểm.',
-                baseStyle: baseStyle,
-                boldStyle: boldStyle,
-              ),
-              pw.SizedBox(height: 6),
-              _buildPdfRatingRule(
-                title: '4. Loại Chưa đạt: ',
-                body:
-                    'Tổng điểm dưới 10,0 điểm hoặc có bất cứ tiêu chí nào 0 điểm.',
-                baseStyle: baseStyle,
-                boldStyle: boldStyle,
-              ),
-              pw.SizedBox(height: 14),
-              pw.Padding(
-                padding: const pw.EdgeInsets.only(left: 14),
-                child: pw.Text('V. ĐÁNH GIÁ TIẾT DẠY:', style: boldStyle),
-              ),
-              pw.SizedBox(height: 6),
-              pw.Padding(
-                padding: const pw.EdgeInsets.only(left: 90, right: 60),
-                child: _buildPdfDottedInfoField(
-                  label: 'Tiết dạy đạt loại: ',
-                  value: ratingText,
-                  clusters: getRowClusters(
-                    PrimarySchoolEvaluationTemplate.rowEvaluatedRating,
+          final double sigColWidth =
+              (PdfPageFormat.a4.width - 76.0) * 0.56;
+          return pw.Align(
+            alignment: pw.Alignment.topLeft,
+            child: _wrapPdfPageWithFreehandOverlay(
+              freehandStrokes: nonSignatureStrokes,
+              startRy: bounds.page3StartRy,
+              endRy: bounds.page3EndRy,
+              child: pw.Column(
+                mainAxisSize: pw.MainAxisSize.min,
+                crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+                children: [
+                  pw.Text('ĐIỂM ĐÁNH GIÁ TIẾT DẠY', style: boldStyle),
+                  pw.SizedBox(height: 8),
+                  _buildPdfRatingRule(
+                    title: '1. Loại Giỏi: ',
+                    body:
+                        'Tổng điểm từ 18,0 đến 20,0 điểm. Trong đó Tiêu chí 2.1 đến 3.4 đạt từ 1,5 điểm trở lên. Các tiêu chí còn lại không có tiêu chí nào dưới 1/2 điểm tối đa.',
+                    baseStyle: baseStyle,
+                    boldStyle: boldStyle,
                   ),
-                  baseStyle: baseStyle,
-                  inputStyle: boldStyle.copyWith(
-                    color: PdfColor.fromInt(0xFF1A237E),
+                  pw.SizedBox(height: 6),
+                  _buildPdfRatingRule(
+                    title: '2. Loại Khá: ',
+                    body:
+                        'Tổng điểm từ 13,5 đến dưới 18,0 điểm. Trong đó Tiêu chí 2.1 đến 3.4 đạt từ 1,5 điểm trở lên. Các tiêu chí còn lại không có tiêu chí nào dưới 1/2 điểm tối đa.',
+                    baseStyle: baseStyle,
+                    boldStyle: boldStyle,
                   ),
-                ),
-              ),
-              pw.SizedBox(height: 22),
-              pw.Align(
-                alignment: pw.Alignment.centerRight,
-                child: pw.SizedBox(
-                  width: 240,
-                  child: pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.center,
-                    children: [
-                      pw.Row(
-                        mainAxisAlignment: pw.MainAxisAlignment.center,
+                  pw.SizedBox(height: 6),
+                  _buildPdfRatingRule(
+                    title: '3. Loại Trung bình: ',
+                    body: 'Tổng điểm từ 10,0 đến dưới 13,5 điểm.',
+                    baseStyle: baseStyle,
+                    boldStyle: boldStyle,
+                  ),
+                  pw.SizedBox(height: 6),
+                  _buildPdfRatingRule(
+                    title: '4. Loại Chưa đạt: ',
+                    body:
+                        'Tổng điểm dưới 10,0 điểm hoặc có bất cứ tiêu chí nào 0 điểm.',
+                    baseStyle: baseStyle,
+                    boldStyle: boldStyle,
+                  ),
+                  pw.SizedBox(height: 14),
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.only(left: 14),
+                    child: pw.Text('V. ĐÁNH GIÁ TIẾT DẠY:', style: boldStyle),
+                  ),
+                  pw.SizedBox(height: 6),
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.only(left: 90, right: 60),
+                    child: _buildPdfDottedInfoField(
+                      label: 'Tiết dạy đạt loại: ',
+                      value: ratingText,
+                      clusters: getRowClusters(
+                        PrimarySchoolEvaluationTemplate.rowEvaluatedRating,
+                      ),
+                      baseStyle: baseStyle,
+                      inputStyle: boldStyle.copyWith(
+                        color: PdfColor.fromInt(0xFF1A237E),
+                      ),
+                    ),
+                  ),
+                  pw.SizedBox(height: 22),
+                  pw.Align(
+                    alignment: pw.Alignment.centerRight,
+                    child: pw.SizedBox(
+                      width: sigColWidth,
+                      child: pw.Column(
                         mainAxisSize: pw.MainAxisSize.min,
+                        crossAxisAlignment: pw.CrossAxisAlignment.center,
                         children: [
-                          pw.Text('Đức Lập, ngày ', style: italicStyle),
-                          _buildPdfRowContent(
-                            text: signDay.isEmpty &&
-                                    getRowClusters(
-                                      PrimarySchoolEvaluationTemplate.rowSignDay,
-                                    ).isEmpty
-                                ? '...'
-                                : signDay,
-                            clusters: getRowClusters(
-                              PrimarySchoolEvaluationTemplate.rowSignDay,
-                            ),
-                            style: italicStyle,
-                            clusterHeight: 12.0,
+                          pw.Row(
+                            mainAxisAlignment: pw.MainAxisAlignment.center,
+                            mainAxisSize: pw.MainAxisSize.min,
+                            children: [
+                              pw.Text('Đức Lập, ngày ', style: italicStyle),
+                              _buildPdfRowContent(
+                                text: signDay.isEmpty &&
+                                        getRowClusters(
+                                          PrimarySchoolEvaluationTemplate
+                                              .rowSignDay,
+                                        ).isEmpty
+                                    ? '...'
+                                    : signDay,
+                                clusters: getRowClusters(
+                                  PrimarySchoolEvaluationTemplate.rowSignDay,
+                                ),
+                                style: italicStyle,
+                                clusterHeight: 12.0,
+                              ),
+                              pw.Text(' tháng ', style: italicStyle),
+                              _buildPdfRowContent(
+                                text: signMonth.isEmpty &&
+                                        getRowClusters(
+                                          PrimarySchoolEvaluationTemplate
+                                              .rowSignMonth,
+                                        ).isEmpty
+                                    ? '...'
+                                    : signMonth,
+                                clusters: getRowClusters(
+                                  PrimarySchoolEvaluationTemplate.rowSignMonth,
+                                ),
+                                style: italicStyle,
+                                clusterHeight: 12.0,
+                              ),
+                              pw.Text(' năm ', style: italicStyle),
+                              _buildPdfRowContent(
+                                text: signYear.isEmpty &&
+                                        getRowClusters(
+                                          PrimarySchoolEvaluationTemplate
+                                              .rowSignYear,
+                                        ).isEmpty
+                                    ? '......'
+                                    : signYear,
+                                clusters: getRowClusters(
+                                  PrimarySchoolEvaluationTemplate.rowSignYear,
+                                ),
+                                style: italicStyle,
+                                clusterHeight: 12.0,
+                              ),
+                            ],
                           ),
-                          pw.Text(' tháng ', style: italicStyle),
-                          _buildPdfRowContent(
-                            text: signMonth.isEmpty &&
-                                    getRowClusters(
-                                      PrimarySchoolEvaluationTemplate
-                                          .rowSignMonth,
-                                    ).isEmpty
-                                ? '...'
-                                : signMonth,
-                            clusters: getRowClusters(
-                              PrimarySchoolEvaluationTemplate.rowSignMonth,
-                            ),
-                            style: italicStyle,
-                            clusterHeight: 12.0,
+                          pw.SizedBox(height: 6),
+                          pw.Text(
+                            'Người dự giờ',
+                            textAlign: pw.TextAlign.center,
+                            style: boldStyle,
                           ),
-                          pw.Text(' năm ', style: italicStyle),
-                          _buildPdfRowContent(
-                            text: signYear.isEmpty &&
-                                    getRowClusters(
-                                      PrimarySchoolEvaluationTemplate
-                                          .rowSignYear,
-                                    ).isEmpty
-                                ? '......'
-                                : signYear,
-                            clusters: getRowClusters(
-                              PrimarySchoolEvaluationTemplate.rowSignYear,
-                            ),
+                          pw.SizedBox(height: 2),
+                          pw.Text(
+                            '(Ký, ghi rõ họ tên)',
+                            textAlign: pw.TextAlign.center,
                             style: italicStyle,
-                            clusterHeight: 12.0,
+                          ),
+                          // Ô chữ ký cố định khoảng cách 85pt và vẽ nét bút chữ ký đúng tại đây
+                          _buildPdfSignatureBoxCanvas(
+                            signatureStrokes: signatureStrokes,
+                            bounds: bounds,
+                          ),
+                          // Dòng Họ tên người dự giờ luôn hiển thị (kể cả khi bỏ trống) để giữ nguyên khoảng cách
+                          pw.Container(
+                            width: 195,
+                            constraints: const pw.BoxConstraints(minHeight: 20),
+                            alignment: pw.Alignment.bottomCenter,
+                            padding: const pw.EdgeInsets.only(bottom: 2),
+                            decoration: const pw.BoxDecoration(
+                              border: pw.Border(
+                                bottom: pw.BorderSide(
+                                  color: PdfColors.grey700,
+                                  width: 0.7,
+                                  style: pw.BorderStyle.dotted,
+                                ),
+                              ),
+                            ),
+                            child: _buildPdfRowContent(
+                              text: observerName,
+                              clusters: getRowClusters(
+                                PrimarySchoolEvaluationTemplate.rowObserverName,
+                              ),
+                              style: boldStyle.copyWith(
+                                color: PdfColor.fromInt(0xFF1A237E),
+                              ),
+                              clusterHeight: 15.0,
+                            ),
                           ),
                         ],
                       ),
-                      pw.SizedBox(height: 6),
-                      pw.Text(
-                        'Người dự giờ',
-                        textAlign: pw.TextAlign.center,
-                        style: boldStyle,
-                      ),
-                      pw.SizedBox(height: 2),
-                      pw.Text(
-                        '(Ký, ghi rõ họ tên)',
-                        textAlign: pw.TextAlign.center,
-                        style: italicStyle,
-                      ),
-                      pw.SizedBox(height: 72),
-                      if (observerName.isNotEmpty ||
-                          getRowClusters(
-                            PrimarySchoolEvaluationTemplate.rowObserverName,
-                          ).isNotEmpty)
-                        _buildPdfRowContent(
-                          text: observerName,
-                          clusters: getRowClusters(
-                            PrimarySchoolEvaluationTemplate.rowObserverName,
-                          ),
-                          style: boldStyle,
-                          clusterHeight: 15.0,
-                        ),
-                    ],
+                    ),
                   ),
-                ),
+                ],
               ),
-            ],
             ),
           );
         },

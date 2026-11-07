@@ -85,6 +85,7 @@ class AppHeaderWidget extends StatelessWidget {
                                 child: TextField(
                                   controller: searchController,
                                   onChanged: onSearchChanged,
+                                  textInputAction: TextInputAction.search,
                                   style: TextStyle(
                                     color: AppColors.basicBlack, // Màu đen tiêu chuẩn
                                     fontSize: searchFontSize, // Cỡ chữ tự động co giãn
@@ -104,6 +105,30 @@ class AppHeaderWidget extends StatelessWidget {
                                   ),
                                 ),
                               ),
+
+                              // Nút X xóa nhanh từ khóa khi đang nhập tìm kiếm
+                              if (searchController != null)
+                                ValueListenableBuilder<TextEditingValue>(
+                                  valueListenable: searchController!,
+                                  builder: (context, value, _) {
+                                    if (value.text.trim().isEmpty) {
+                                      return const SizedBox.shrink();
+                                    }
+                                    return IconButton(
+                                      visualDensity: VisualDensity.compact,
+                                      tooltip: 'Xóa tìm kiếm',
+                                      onPressed: () {
+                                        searchController!.clear();
+                                        onSearchChanged?.call('');
+                                      },
+                                      icon: const Icon(
+                                        Icons.close_rounded,
+                                        color: AppColors.primaryBlue,
+                                        size: 20,
+                                      ),
+                                    );
+                                  },
+                                ),
 
                               // Góc bên phải trong ô tìm kiếm: Nút Icon User đẹp mắt
                               Padding(

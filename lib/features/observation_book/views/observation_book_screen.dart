@@ -35,6 +35,7 @@ class ObservationBookScreen extends StatelessWidget {
           child: DriveFolderSectionWidget(
             tabIndex: 1,
             foldersListenable: driveDatasource.observationFoldersNotifier,
+            allTabItemsListenable: driveDatasource.allObservationItemsNotifier,
             activeFolderListenable:
                 driveDatasource.activeObservationFolderNotifier,
             searchKeywordListenable:

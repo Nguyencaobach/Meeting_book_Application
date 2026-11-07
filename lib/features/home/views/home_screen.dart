@@ -4,6 +4,7 @@ import '../../../widgets/app_header_widget.dart';
 import '../../notes/views/notes_screen.dart';
 import '../../observation_book/views/observation_book_screen.dart';
 import '../service/home_service.dart';
+import 'widgets/home_sidebar_drawer.dart';
 
 /// Màn hình Home chính của ứng dụng (Tự co giãn theo mọi kích thước màn hình)
 class HomeScreen extends StatefulWidget {
@@ -14,6 +15,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final TextEditingController _searchController = TextEditingController();
   final HomeService _homeService = HomeService();
 
@@ -28,10 +30,23 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     super.initState();
     // Tự động kiểm tra/khởi tạo cây thư mục MeetingBook/ trên Google Drive và tải danh sách thư mục
     _homeService.initDriveFolders();
+    _homeService.searchKeywordNotifier.addListener(_syncSearchControllerFromState);
+  }
+
+  void _syncSearchControllerFromState() {
+    final String latestKeyword = _homeService.searchKeywordNotifier.value;
+    if (_searchController.text != latestKeyword) {
+      _searchController.value = TextEditingValue(
+        text: latestKeyword,
+        selection: TextSelection.collapsed(offset: latestKeyword.length),
+      );
+    }
   }
 
   @override
   void dispose() {
+    _homeService.searchKeywordNotifier
+        .removeListener(_syncSearchControllerFromState);
     _tabController.dispose();
     _searchController.dispose();
     super.dispose();
@@ -42,7 +57,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final theme = Theme.of(context);
 
     return Scaffold(
+      key: _scaffoldKey,
       backgroundColor: AppColors.basicWhite, // Nền trắng cơ bản (#FFFFFF)
+      drawer: HomeSidebarDrawer(
+        onOpenUserGuide: () {
+          _homeService.openUserGuideScreen(context);
+        },
+      ),
       body: LayoutBuilder(
         builder: (context, constraints) {
           // Tự động co giãn khoảng cách và kích thước nút theo màn hình
@@ -66,7 +87,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     hintText: currentHintText,
                     userPhotoUrl: _homeService.userPhotoUrl,
                     onMenuPressed: () {
-                      // Xử lý mở menu sau này
+                      _scaffoldKey.currentState?.openDrawer();
                     },
                     onUserPressed: () {
                       // Khi bấm vào icon User góc phải ô tìm kiếm -> Hiện Email & nút Đăng xuất

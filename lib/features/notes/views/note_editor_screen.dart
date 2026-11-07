@@ -159,6 +159,16 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   double _rulerAngleRad = 0.0;
   double? _activeRulerSnapEdgeSign;
 
+  // Các khóa đo bố cục thực tế của 3 trang Sổ dự giờ & ô Chữ ký để xuất PDF/Word khớp đúng 100% vị trí
+  final GlobalKey _evalFormStackKey = GlobalKey();
+  final GlobalKey _evalPage1Key = GlobalKey();
+  final GlobalKey _evalPage2Key = GlobalKey();
+  final GlobalKey _evalPage3Key = GlobalKey();
+  final GlobalKey _evalSignatureBoxKey = GlobalKey();
+  double _lastMeasuredEvalPaperWidth =
+      PrimarySchoolEvaluationTemplate.minPaperWidth;
+  double _lastMeasuredEvalRowHeight = 40.0;
+
   // Chỉ số trang hiện tại (mặc định trang 0 -> pageNumber = 1)
   final int _currentPageIndex = 0;
 
@@ -1767,6 +1777,56 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     await _handleExportFile(isPdf: selectedFormat == 'pdf');
   }
 
+  /// Đo đạc tọa độ thực tế của 3 trang biểu mẫu & ô chữ ký Người dự giờ ngay trên màn hình hiện tại
+  EvaluationExportLayoutBounds _measureEvaluationExportLayoutBounds() {
+    final RenderObject? stackObj =
+        _evalFormStackKey.currentContext?.findRenderObject();
+    if (stackObj is! RenderBox ||
+        !stackObj.hasSize ||
+        _lastMeasuredEvalPaperWidth <= 0 ||
+        _lastMeasuredEvalRowHeight <= 0) {
+      return const EvaluationExportLayoutBounds();
+    }
+
+    ({double startNx, double endNx, double startRy, double endRy})? measureBox(
+      GlobalKey key,
+    ) {
+      final RenderObject? ro = key.currentContext?.findRenderObject();
+      if (ro is! RenderBox || !ro.hasSize) return null;
+      final Offset topLeft = ro.localToGlobal(Offset.zero, ancestor: stackObj);
+      final Size sz = ro.size;
+      return (
+        startNx: (topLeft.dx / _lastMeasuredEvalPaperWidth).clamp(0.0, 1.0),
+        endNx:
+            ((topLeft.dx + sz.width) / _lastMeasuredEvalPaperWidth).clamp(0.0, 1.0),
+        startRy: math.max(0.0, topLeft.dy / _lastMeasuredEvalRowHeight),
+        endRy: math.max(
+          0.1,
+          (topLeft.dy + sz.height) / _lastMeasuredEvalRowHeight,
+        ),
+      );
+    }
+
+    final p1 = measureBox(_evalPage1Key);
+    final p2 = measureBox(_evalPage2Key);
+    final p3 = measureBox(_evalPage3Key);
+    final sig = measureBox(_evalSignatureBoxKey);
+
+    const defaults = EvaluationExportLayoutBounds();
+    return EvaluationExportLayoutBounds(
+      page1StartRy: p1?.startRy ?? defaults.page1StartRy,
+      page1EndRy: p1?.endRy ?? defaults.page1EndRy,
+      page2StartRy: p2?.startRy ?? defaults.page2StartRy,
+      page2EndRy: p2?.endRy ?? defaults.page2EndRy,
+      page3StartRy: p3?.startRy ?? defaults.page3StartRy,
+      page3EndRy: p3?.endRy ?? defaults.page3EndRy,
+      sigStartNx: sig?.startNx ?? defaults.sigStartNx,
+      sigEndNx: sig?.endNx ?? defaults.sigEndNx,
+      sigStartRy: sig?.startRy ?? defaults.sigStartRy,
+      sigEndRy: sig?.endRy ?? defaults.sigEndRy,
+    );
+  }
+
   /// Xử lý tạo mảng byte PDF / Word ngay trên RAM (không lưu ổ cứng)
   /// và đẩy thẳng lên thư mục `MeetingBook/Export File/Ghi chú` hoặc `MeetingBook/Export File/Sổ dự giờ`
   Future<void> _handleExportFile({required bool isPdf}) async {
@@ -1792,14 +1852,20 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
           : widget.fileItem.displayName;
 
       // 1. Khởi tạo byte PDF hoặc Word trực tiếp trên RAM
+      final EvaluationExportLayoutBounds? evalLayoutBounds =
+          effectiveTabIndex == 1
+              ? _measureEvaluationExportLayoutBounds()
+              : null;
       final Uint8List exportedBytes = isPdf
           ? await PdfExportService.generatePdfBytes(
               notebook: snapshot,
               tabIndex: effectiveTabIndex,
+              evalLayoutBounds: evalLayoutBounds,
             )
           : WordExportService.generateWordBytes(
               notebook: snapshot,
               tabIndex: effectiveTabIndex,
+              evalLayoutBounds: evalLayoutBounds,
             );
 
       final String extension = isPdf ? '.pdf' : '.doc';
@@ -2696,8 +2762,11 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         // Nếu đang mở biểu mẫu "Phiếu đánh giá tiết dạy giáo viên cấp Tiểu học" (3 trang):
         // Render trực tiếp bố cục 3 trang biểu mẫu tương tác kèm lớp vẽ bút trực tiếp 60-120fps như Ghi chú
         if (isPrimaryEval) {
+          _lastMeasuredEvalPaperWidth = paperWidth;
+          _lastMeasuredEvalRowHeight = rowHeight;
           final double maxEvalPaperHeight = rowHeight * 250.0;
           final Widget primaryFormContent = Stack(
+            key: _evalFormStackKey,
             children: [
               IgnorePointer(
                 ignoring: _isViewOnlyMode || _isPenFreehandMode,
@@ -2705,6 +2774,10 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                   paperWidth: paperWidth,
                   rowHeight: rowHeight,
                   bodyTextStyle: effectiveRowTextStyle,
+                  page1ContentKey: _evalPage1Key,
+                  page2ContentKey: _evalPage2Key,
+                  page3ContentKey: _evalPage3Key,
+                  signatureBoxKey: _evalSignatureBoxKey,
                   getRowCleanText: (int rIdx) =>
                       _cleanText(_rowControllers[rIdx]?.text ?? ''),
                   onApplySuggestedRating: () {

@@ -21,6 +21,7 @@ import 'item_actions_bottom_sheet.dart';
 class DriveFolderSectionWidget extends StatefulWidget {
   final int tabIndex;
   final ValueListenable<List<DriveFolderItem>> foldersListenable;
+  final ValueListenable<List<DriveFolderItem>>? allTabItemsListenable;
   final ValueListenable<DriveFolderItem?>? activeFolderListenable;
   final ValueListenable<String>? searchKeywordListenable;
   final Future<void> Function() onRefresh;
@@ -32,6 +33,7 @@ class DriveFolderSectionWidget extends StatefulWidget {
     super.key,
     this.tabIndex = 0,
     required this.foldersListenable,
+    this.allTabItemsListenable,
     required this.onRefresh,
     required this.emptyMessage,
     this.activeFolderListenable,
@@ -307,114 +309,166 @@ class _DriveFolderSectionWidgetState extends State<DriveFolderSectionWidget> {
                 child: ValueListenableBuilder<List<DriveFolderItem>>(
                   valueListenable: widget.foldersListenable,
                   builder: (context, rawItems, _) {
-                    return ValueListenableBuilder<String>(
-                      valueListenable: widget.searchKeywordListenable ??
-                          ValueNotifier<String>(''),
-                      builder: (context, keyword, _) {
-                        final String cleanKeyword = keyword.trim().toLowerCase();
-                        final List<DriveFolderItem> items = cleanKeyword.isEmpty
-                            ? rawItems
-                            : rawItems
-                                .where(
-                                  (item) => item.displayName
-                                      .toLowerCase()
-                                      .contains(cleanKeyword),
-                                )
-                                .toList();
-
-                        if (items.isEmpty) {
-                          return RefreshIndicator(
-                            color: AppColors.primaryBlue,
-                            onRefresh: widget.onRefresh,
-                            child: ListView(
-                              controller: _scrollController,
-                              physics: const AlwaysScrollableScrollPhysics(
-                                parent: BouncingScrollPhysics(),
-                              ),
-                              children: [
-                                SizedBox(height: constraints.maxHeight * 0.25),
-                                Padding(
-                                  padding: const EdgeInsets.all(24),
-                                  child: Text(
-                                    cleanKeyword.isNotEmpty
-                                        ? 'Không tìm thấy mục nào phù hợp với "$keyword".'
-                                        : widget.emptyMessage,
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      color: AppColors.basicBlack
-                                          .withValues(alpha: 0.6),
-                                      fontSize: emptyTextSize,
-                                      height: 1.5,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        }
-
-                        return RefreshIndicator(
-                          color: AppColors.primaryBlue,
-                          onRefresh: widget.onRefresh,
-                          child: Scrollbar(
-                            controller: _scrollController,
-                            thumbVisibility: true,
-                            radius: const Radius.circular(8),
-                            child: _isGridView
-                                // Chế độ xem theo từng ô (Lưới): 2, 4 hoặc 6 ô tùy kích thước màn hình
-                                ? GridView.builder(
-                                    controller: _scrollController,
-                                    physics:
-                                        const AlwaysScrollableScrollPhysics(
-                                      parent: BouncingScrollPhysics(),
-                                    ),
-                                    padding: EdgeInsets.fromLTRB(
-                                      horizontalPadding,
-                                      8,
-                                      horizontalPadding,
-                                      96, // Chừa khoảng trống cho nút (+) góc dưới
-                                    ),
-                                    gridDelegate:
-                                        SliverGridDelegateWithFixedCrossAxisCount(
-                                      crossAxisCount: crossAxisCount,
-                                      mainAxisSpacing: 14,
-                                      crossAxisSpacing: 14,
-                                      childAspectRatio: 2.0,
-                                    ),
-                                    itemCount: items.length,
-                                    itemBuilder: (context, index) {
-                                      final item = items[index];
-                                      return _buildGridItemTile(
-                                        item: item,
-                                        fontSize: folderNameSize,
-                                      );
-                                    },
-                                  )
-                                // Chế độ xem theo Danh sách (List)
-                                : ListView.separated(
-                                    controller: _scrollController,
-                                    physics:
-                                        const AlwaysScrollableScrollPhysics(
-                                      parent: BouncingScrollPhysics(),
-                                    ),
-                                    padding: EdgeInsets.fromLTRB(
-                                      horizontalPadding,
-                                      8,
-                                      horizontalPadding,
-                                      96,
-                                    ),
-                                    itemCount: items.length,
-                                    separatorBuilder: (_, _) =>
-                                        const SizedBox(height: 10),
-                                    itemBuilder: (context, index) {
-                                      final item = items[index];
-                                      return _buildListItemTile(
-                                        item: item,
-                                        fontSize: folderNameSize,
-                                      );
-                                    },
-                                  ),
+                    return ValueListenableBuilder<List<DriveFolderItem>>(
+                      valueListenable: widget.allTabItemsListenable ??
+                          ValueNotifier<List<DriveFolderItem>>(
+                            const <DriveFolderItem>[],
                           ),
+                      builder: (context, allTabItems, _) {
+                        return ValueListenableBuilder<String>(
+                          valueListenable: widget.searchKeywordListenable ??
+                              ValueNotifier<String>(''),
+                          builder: (context, keyword, _) {
+                            final String trimmedKeyword = keyword.trim();
+                            final bool isSearching = trimmedKeyword.isNotEmpty;
+                            final DriveFolderItem? currentActiveFolder =
+                                widget.activeFolderListenable?.value;
+
+                            // Khi đang tìm kiếm ở màn hình gốc của Tab -> Tìm trên toàn bộ Thư mục & Tệp (kể cả tệp nằm trong thư mục con)
+                            List<DriveFolderItem> candidatePool = rawItems;
+                            if (isSearching &&
+                                currentActiveFolder == null &&
+                                allTabItems.isNotEmpty) {
+                              final Map<String, DriveFolderItem> mergedById =
+                                  <String, DriveFolderItem>{};
+                              for (final DriveFolderItem item in rawItems) {
+                                mergedById[item.id] = item;
+                              }
+                              for (final DriveFolderItem item in allTabItems) {
+                                mergedById.putIfAbsent(item.id, () => item);
+                              }
+                              final List<DriveFolderItem> folders =
+                                  <DriveFolderItem>[];
+                              final List<DriveFolderItem> files =
+                                  <DriveFolderItem>[];
+                              for (final DriveFolderItem item
+                                  in mergedById.values) {
+                                if (item.isFolder) {
+                                  folders.add(item);
+                                } else {
+                                  files.add(item);
+                                }
+                              }
+                              candidatePool = <DriveFolderItem>[
+                                ...folders,
+                                ...files,
+                              ];
+                            }
+
+                            final List<DriveFolderItem> items = !isSearching
+                                ? rawItems
+                                : candidatePool
+                                    .where(
+                                      (DriveFolderItem item) =>
+                                          GoogleDriveDatasource
+                                              .matchesSearchKeyword(
+                                        item.displayName,
+                                        trimmedKeyword,
+                                      ),
+                                    )
+                                    .toList();
+
+                            if (items.isEmpty) {
+                              return RefreshIndicator(
+                                color: AppColors.primaryBlue,
+                                onRefresh: widget.onRefresh,
+                                child: ListView(
+                                  controller: _scrollController,
+                                  physics: const AlwaysScrollableScrollPhysics(
+                                    parent: BouncingScrollPhysics(),
+                                  ),
+                                  children: [
+                                    SizedBox(
+                                      height: constraints.maxHeight * 0.25,
+                                    ),
+                                    Padding(
+                                      padding: const EdgeInsets.all(24),
+                                      child: Text(
+                                        isSearching
+                                            ? 'Không tìm thấy tệp hoặc thư mục nào phù hợp với "$trimmedKeyword".'
+                                            : widget.emptyMessage,
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          color: AppColors.basicBlack
+                                              .withValues(alpha: 0.6),
+                                          fontSize: emptyTextSize,
+                                          height: 1.5,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }
+
+                            return RefreshIndicator(
+                              color: AppColors.primaryBlue,
+                              onRefresh: widget.onRefresh,
+                              child: Scrollbar(
+                                controller: _scrollController,
+                                thumbVisibility: true,
+                                radius: const Radius.circular(8),
+                                child: _isGridView
+                                    // Chế độ xem theo từng ô (Lưới): 2, 4 hoặc 6 ô tùy kích thước màn hình
+                                    ? GridView.builder(
+                                        controller: _scrollController,
+                                        physics:
+                                            const AlwaysScrollableScrollPhysics(
+                                          parent: BouncingScrollPhysics(),
+                                        ),
+                                        padding: EdgeInsets.fromLTRB(
+                                          horizontalPadding,
+                                          8,
+                                          horizontalPadding,
+                                          96, // Chừa khoảng trống cho nút (+) góc dưới
+                                        ),
+                                        gridDelegate:
+                                            SliverGridDelegateWithFixedCrossAxisCount(
+                                          crossAxisCount: crossAxisCount,
+                                          mainAxisSpacing: 14,
+                                          crossAxisSpacing: 14,
+                                          childAspectRatio: 2.0,
+                                        ),
+                                        itemCount: items.length,
+                                        itemBuilder: (context, index) {
+                                          final item = items[index];
+                                          return _buildGridItemTile(
+                                            item: item,
+                                            fontSize: folderNameSize,
+                                            isSearchingAtRoot: isSearching &&
+                                                currentActiveFolder == null,
+                                          );
+                                        },
+                                      )
+                                    // Chế độ xem theo Danh sách (List)
+                                    : ListView.separated(
+                                        controller: _scrollController,
+                                        physics:
+                                            const AlwaysScrollableScrollPhysics(
+                                          parent: BouncingScrollPhysics(),
+                                        ),
+                                        padding: EdgeInsets.fromLTRB(
+                                          horizontalPadding,
+                                          8,
+                                          horizontalPadding,
+                                          96,
+                                        ),
+                                        itemCount: items.length,
+                                        separatorBuilder: (_, _) =>
+                                            const SizedBox(height: 10),
+                                        itemBuilder: (context, index) {
+                                          final item = items[index];
+                                          return _buildListItemTile(
+                                            item: item,
+                                            fontSize: folderNameSize,
+                                            isSearchingAtRoot: isSearching &&
+                                                currentActiveFolder == null,
+                                          );
+                                        },
+                                      ),
+                              ),
+                            );
+                          },
                         );
                       },
                     );
@@ -432,8 +486,12 @@ class _DriveFolderSectionWidgetState extends State<DriveFolderSectionWidget> {
   Widget _buildGridItemTile({
     required DriveFolderItem item,
     required double fontSize,
+    bool isSearchingAtRoot = false,
   }) {
     final bool isFolder = item.isFolder;
+    final String? parentFolderName = isSearchingAtRoot
+        ? _driveDatasource.getParentFolderDisplayName(item)
+        : null;
 
     return InkWell(
       borderRadius: BorderRadius.circular(14),
@@ -457,16 +515,33 @@ class _DriveFolderSectionWidgetState extends State<DriveFolderSectionWidget> {
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: Text(
-                item.displayName,
-                textAlign: TextAlign.left,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: AppColors.basicBlack,
-                  fontSize: fontSize,
-                  fontWeight: FontWeight.w600,
-                ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.displayName,
+                    textAlign: TextAlign.left,
+                    maxLines: parentFolderName != null ? 1 : 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppColors.basicBlack,
+                      fontSize: fontSize,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (parentFolderName != null)
+                    Text(
+                      'Trong: $parentFolderName',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: AppColors.primaryBlue.withValues(alpha: 0.8),
+                        fontSize: fontSize * 0.82,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                ],
               ),
             ),
             const SizedBox(width: 4),
@@ -499,8 +574,12 @@ class _DriveFolderSectionWidgetState extends State<DriveFolderSectionWidget> {
   Widget _buildListItemTile({
     required DriveFolderItem item,
     required double fontSize,
+    bool isSearchingAtRoot = false,
   }) {
     final bool isFolder = item.isFolder;
+    final String? parentFolderName = isSearchingAtRoot
+        ? _driveDatasource.getParentFolderDisplayName(item)
+        : null;
 
     return InkWell(
       borderRadius: BorderRadius.circular(14),
@@ -525,16 +604,33 @@ class _DriveFolderSectionWidgetState extends State<DriveFolderSectionWidget> {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: Text(
-                item.displayName,
-                textAlign: TextAlign.left,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: AppColors.basicBlack,
-                  fontSize: fontSize * 1.05,
-                  fontWeight: FontWeight.w600,
-                ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.displayName,
+                    textAlign: TextAlign.left,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: AppColors.basicBlack,
+                      fontSize: fontSize * 1.05,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (parentFolderName != null)
+                    Text(
+                      'Trong thư mục: $parentFolderName',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: AppColors.primaryBlue.withValues(alpha: 0.8),
+                        fontSize: fontSize * 0.85,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                ],
               ),
             ),
             const SizedBox(width: 8),

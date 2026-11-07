@@ -143,6 +143,17 @@ class GoogleDriveDatasource {
   final ValueNotifier<List<DriveFolderItem>> observationFoldersNotifier =
       ValueNotifier<List<DriveFolderItem>>([]);
 
+  /// Toàn bộ danh sách Thư mục & Tệp của Tab Ghi chú (bao gồm cả bên trong các thư mục con) phục vụ tìm kiếm toàn cục
+  final ValueNotifier<List<DriveFolderItem>> allNotesItemsNotifier =
+      ValueNotifier<List<DriveFolderItem>>([]);
+
+  /// Toàn bộ danh sách Thư mục & Tệp của Tab Sổ dự giờ (bao gồm cả bên trong các thư mục con) phục vụ tìm kiếm toàn cục
+  final ValueNotifier<List<DriveFolderItem>> allObservationItemsNotifier =
+      ValueNotifier<List<DriveFolderItem>>([]);
+
+  /// Bộ nhớ đệm ánh xạ ID thư mục -> Tên hiển thị của thư mục cha
+  final Map<String, String> _folderNameById = <String, String>{};
+
   /// Trạng thái đang tải/đồng bộ danh sách từ Google Drive
   final ValueNotifier<bool> isSyncingFoldersNotifier =
       ValueNotifier<bool>(false);
@@ -154,6 +165,69 @@ class GoogleDriveDatasource {
   /// Từ khóa tìm kiếm hiện tại ở Tab Sổ dự giờ
   final ValueNotifier<String> observationSearchKeywordNotifier =
       ValueNotifier<String>('');
+
+  /// Chuẩn hóa chuỗi tiếng Việt (chuyển chữ thường + bỏ dấu tiếng Việt) để tìm kiếm cả có dấu lẫn không dấu
+  static String normalizeSearchText(String input) {
+    String str = input.trim().toLowerCase();
+    if (str.isEmpty) return '';
+    const Map<String, String> vietnameseMap = <String, String>{
+      'à': 'a', 'á': 'a', 'ạ': 'a', 'ả': 'a', 'ã': 'a',
+      'â': 'a', 'ầ': 'a', 'ấ': 'a', 'ậ': 'a', 'ẩ': 'a', 'ẫ': 'a',
+      'ă': 'a', 'ằ': 'a', 'ắ': 'a', 'ặ': 'a', 'ẳ': 'a', 'ẵ': 'a',
+      'è': 'e', 'é': 'e', 'ẹ': 'e', 'ẻ': 'e', 'ẽ': 'e',
+      'ê': 'e', 'ề': 'e', 'ế': 'e', 'ệ': 'e', 'ể': 'e', 'ễ': 'e',
+      'ì': 'i', 'í': 'i', 'ị': 'i', 'ỉ': 'i', 'ĩ': 'i',
+      'ò': 'o', 'ó': 'o', 'ọ': 'o', 'ỏ': 'o', 'õ': 'o',
+      'ô': 'o', 'ồ': 'o', 'ố': 'o', 'ộ': 'o', 'ổ': 'o', 'ỗ': 'o',
+      'ơ': 'o', 'ờ': 'o', 'ớ': 'o', 'ợ': 'o', 'ở': 'o', 'ỡ': 'o',
+      'ù': 'u', 'ú': 'u', 'ụ': 'u', 'ủ': 'u', 'ũ': 'u',
+      'ư': 'u', 'ừ': 'u', 'ứ': 'u', 'ự': 'u', 'ử': 'u', 'ữ': 'u',
+      'ỳ': 'y', 'ý': 'y', 'ỵ': 'y', 'ỷ': 'y', 'ỹ': 'y',
+      'đ': 'd',
+    };
+    final StringBuffer buffer = StringBuffer();
+    for (int i = 0; i < str.length; i++) {
+      final String ch = str[i];
+      buffer.write(vietnameseMap[ch] ?? ch);
+    }
+    return buffer.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+  }
+
+  /// Kiểm tra tên Tệp hoặc Thư mục có khớp với từ khóa tìm kiếm không (hỗ trợ cả có dấu & không dấu)
+  static bool matchesSearchKeyword(String itemName, String rawKeyword) {
+    final String cleanKey = rawKeyword.trim().toLowerCase();
+    if (cleanKey.isEmpty) return true;
+    final String lowerName = itemName.trim().toLowerCase();
+    if (lowerName.contains(cleanKey)) {
+      return true;
+    }
+    final String normName = normalizeSearchText(itemName);
+    final String normKey = normalizeSearchText(rawKeyword);
+    if (normKey.isEmpty) return true;
+    if (normName.contains(normKey)) {
+      return true;
+    }
+    final List<String> tokens = normKey
+        .split(' ')
+        .where((String t) => t.isNotEmpty)
+        .toList();
+    if (tokens.length > 1) {
+      return tokens.every((String token) => normName.contains(token));
+    }
+    return false;
+  }
+
+  /// Lấy tên thư mục cha của một mục (nếu mục đó nằm trong thư mục con)
+  String? getParentFolderDisplayName(DriveFolderItem item) {
+    final String? pId = item.parentFolderId;
+    if (pId == null ||
+        pId.isEmpty ||
+        pId == _notesTabFolderId ||
+        pId == _observationTabFolderId) {
+      return null;
+    }
+    return _folderNameById[pId];
+  }
 
   /// Lấy email đang đăng nhập (từ phiên Google hoặc bộ nhớ duy trì đăng nhập)
   String get currentEmail => _currentUser?.email ?? _cachedEmail ?? '';
@@ -472,8 +546,15 @@ class GoogleDriveDatasource {
   // ===========================================================================
   Future<void> openNotesFolder(DriveFolderItem folder) async {
     if (!folder.isFolder) return;
+    _folderNameById[folder.id] = folder.displayName;
     if (_notesFolderStack.isEmpty || _notesFolderStack.last.id != folder.id) {
       _notesFolderStack.add(folder);
+    }
+    // Khi bấm mở vào trong 1 thư mục từ kết quả tìm kiếm -> Xóa từ khóa lọc để hiển thị trọn vẹn nội dung thư mục
+    if (notesSearchKeywordNotifier.value.isNotEmpty ||
+        observationSearchKeywordNotifier.value.isNotEmpty) {
+      notesSearchKeywordNotifier.value = '';
+      observationSearchKeywordNotifier.value = '';
     }
     activeNotesFolderNotifier.value = _notesFolderStack.last;
     await refreshCurrentNotesView();
@@ -498,6 +579,11 @@ class GoogleDriveDatasource {
           activeNotesFolderNotifier.value?.id ?? _notesTabFolderId!;
       final items = await _fetchItemsInParent(targetParentId);
       notesFoldersNotifier.value = items;
+      _upsertItemsIntoTabSearchIndex(0, items);
+      if (activeNotesFolderNotifier.value == null &&
+          _notesTabFolderId != null) {
+        _syncSubfolderItemsInBackground(0, items);
+      }
     } catch (e) {
       debugPrint('Lỗi tải danh sách mục trong Tab Ghi chú: $e');
       rethrow;
@@ -509,9 +595,15 @@ class GoogleDriveDatasource {
   /// Mở vào bên trong 1 thư mục ở Tab Sổ dự giờ (hỗ trợ nhiều cấp thư mục)
   Future<void> openObservationFolder(DriveFolderItem folder) async {
     if (!folder.isFolder) return;
+    _folderNameById[folder.id] = folder.displayName;
     if (_observationFolderStack.isEmpty ||
         _observationFolderStack.last.id != folder.id) {
       _observationFolderStack.add(folder);
+    }
+    if (notesSearchKeywordNotifier.value.isNotEmpty ||
+        observationSearchKeywordNotifier.value.isNotEmpty) {
+      notesSearchKeywordNotifier.value = '';
+      observationSearchKeywordNotifier.value = '';
     }
     activeObservationFolderNotifier.value = _observationFolderStack.last;
     await refreshCurrentObservationView();
@@ -536,6 +628,11 @@ class GoogleDriveDatasource {
           activeObservationFolderNotifier.value?.id ?? _observationTabFolderId!;
       final items = await _fetchItemsInParent(targetParentId);
       observationFoldersNotifier.value = items;
+      _upsertItemsIntoTabSearchIndex(1, items);
+      if (activeObservationFolderNotifier.value == null &&
+          _observationTabFolderId != null) {
+        _syncSubfolderItemsInBackground(1, items);
+      }
     } catch (e) {
       debugPrint('Lỗi tải danh sách mục trong Tab Sổ dự giờ: $e');
       rethrow;
@@ -650,6 +747,7 @@ class GoogleDriveDatasource {
       isFolder: true,
       parentFolderId: targetParentId,
     );
+    _folderNameById[newItem.id] = newItem.displayName;
 
     // Đưa thư mục mới lên đầu danh sách hiển thị hiện tại
     if (tabIndex == 0) {
@@ -663,6 +761,7 @@ class GoogleDriveDatasource {
         ...observationFoldersNotifier.value,
       ];
     }
+    _upsertItemsIntoTabSearchIndex(tabIndex, <DriveFolderItem>[newItem]);
 
     return newItem;
   }
@@ -749,6 +848,7 @@ class GoogleDriveDatasource {
       currentItems.insert(firstFileIndex, newFileItem);
     }
     notesFoldersNotifier.value = currentItems;
+    _upsertItemsIntoTabSearchIndex(0, <DriveFolderItem>[newFileItem]);
 
     return (fileItem: newFileItem, notebook: syncedNotebook);
   }
@@ -836,6 +936,7 @@ class GoogleDriveDatasource {
       currentItems.insert(firstFileIndex, newFileItem);
     }
     observationFoldersNotifier.value = currentItems;
+    _upsertItemsIntoTabSearchIndex(1, <DriveFolderItem>[newFileItem]);
 
     return (fileItem: newFileItem, notebook: syncedNotebook);
   }
@@ -983,20 +1084,22 @@ class GoogleDriveDatasource {
       }
     }
 
+    final DriveFolderItem renamedItem = DriveFolderItem(
+      id: item.id,
+      name: updatedDriveName,
+      createdTime: item.createdTime,
+      isFolder: item.isFolder,
+      parentFolderId: item.parentFolderId,
+      paperTemplate: item.paperTemplate,
+    );
+    if (renamedItem.isFolder) {
+      _folderNameById[renamedItem.id] = renamedItem.displayName;
+    }
+
     notifier.value = notifier.value
-        .map(
-          (current) => current.id == item.id
-              ? DriveFolderItem(
-                  id: current.id,
-                  name: updatedDriveName,
-                  createdTime: current.createdTime,
-                  isFolder: current.isFolder,
-                  parentFolderId: current.parentFolderId,
-                  paperTemplate: current.paperTemplate,
-                )
-              : current,
-        )
+        .map((current) => current.id == item.id ? renamedItem : current)
         .toList();
+    _upsertItemsIntoTabSearchIndex(tabIndex, <DriveFolderItem>[renamedItem]);
   }
 
   /// 2. Xóa Thư mục hoặc Tệp ghi chú (Đưa vào thùng rác Google Drive)
@@ -1013,6 +1116,10 @@ class GoogleDriveDatasource {
         tabIndex == 0 ? notesFoldersNotifier : observationFoldersNotifier;
     notifier.value =
         notifier.value.where((current) => current.id != item.id).toList();
+    final allNotifier =
+        tabIndex == 0 ? allNotesItemsNotifier : allObservationItemsNotifier;
+    allNotifier.value =
+        allNotifier.value.where((current) => current.id != item.id).toList();
   }
 
   /// 2b. Hoàn tác Xóa (Khôi phục Thư mục hoặc Tệp từ thùng rác Google Drive về lại danh sách)
@@ -1033,6 +1140,8 @@ class GoogleDriveDatasource {
     required int tabIndex,
     required DriveFolderItem item,
   }) {
+    _upsertItemsIntoTabSearchIndex(tabIndex, <DriveFolderItem>[item]);
+
     final String currentViewParentId = tabIndex == 0
         ? (activeNotesFolderNotifier.value?.id ?? (_notesTabFolderId ?? ''))
         : (activeObservationFolderNotifier.value?.id ??
@@ -1214,6 +1323,16 @@ class GoogleDriveDatasource {
     notifier.value =
         notifier.value.where((current) => current.id != item.id).toList();
 
+    final DriveFolderItem movedItem = DriveFolderItem(
+      id: item.id,
+      name: item.name,
+      createdTime: item.createdTime,
+      isFolder: item.isFolder,
+      parentFolderId: targetFolderId,
+      paperTemplate: item.paperTemplate,
+    );
+    _upsertItemsIntoTabSearchIndex(tabIndex, <DriveFolderItem>[movedItem]);
+
     return oldParentId;
   }
 
@@ -1374,10 +1493,91 @@ class GoogleDriveDatasource {
       ]);
       notesFoldersNotifier.value = results[0];
       observationFoldersNotifier.value = results[1];
+      _upsertItemsIntoTabSearchIndex(0, results[0]);
+      _upsertItemsIntoTabSearchIndex(1, results[1]);
+
+      // Đồng bộ ngầm thêm các tệp/thư mục nằm sâu trong các thư mục con để thanh tìm kiếm ở Home tìm được toàn bộ
+      _syncSubfolderItemsInBackground(0, results[0]);
+      _syncSubfolderItemsInBackground(1, results[1]);
     } catch (e) {
       debugPrint('Lỗi tải danh sách từ Google Drive: $e');
     } finally {
       isSyncingFoldersNotifier.value = false;
+    }
+  }
+
+  /// Cập nhật hoặc thêm danh sách mục vào bộ chỉ mục tìm kiếm toàn cục trên RAM của từng Tab
+  void _upsertItemsIntoTabSearchIndex(
+    int tabIndex,
+    List<DriveFolderItem> newItems,
+  ) {
+    if (newItems.isEmpty) return;
+    final ValueNotifier<List<DriveFolderItem>> targetNotifier =
+        tabIndex == 0 ? allNotesItemsNotifier : allObservationItemsNotifier;
+    final Map<String, DriveFolderItem> byId = <String, DriveFolderItem>{
+      for (final DriveFolderItem existing in targetNotifier.value)
+        existing.id: existing,
+    };
+    for (final DriveFolderItem item in newItems) {
+      if (item.id.isEmpty) continue;
+      byId[item.id] = item;
+      if (item.isFolder) {
+        _folderNameById[item.id] = item.displayName;
+      }
+    }
+    final List<DriveFolderItem> folders = <DriveFolderItem>[];
+    final List<DriveFolderItem> files = <DriveFolderItem>[];
+    for (final DriveFolderItem item in byId.values) {
+      if (item.isFolder) {
+        folders.add(item);
+      } else {
+        files.add(item);
+      }
+    }
+    targetNotifier.value = <DriveFolderItem>[...folders, ...files];
+  }
+
+  /// Tải ngầm đệ quy các tệp & thư mục con bên trong các thư mục của Tab để phục vụ tìm kiếm toàn cục
+  Future<void> _syncSubfolderItemsInBackground(
+    int tabIndex,
+    List<DriveFolderItem> rootItems,
+  ) async {
+    try {
+      final Set<String> visitedFolderIds = <String>{};
+      List<DriveFolderItem> pendingFolders =
+          rootItems.where((DriveFolderItem e) => e.isFolder).toList();
+      int depth = 0;
+
+      while (pendingFolders.isNotEmpty && depth < 4) {
+        depth++;
+        final List<DriveFolderItem> currentBatch = pendingFolders
+            .where((DriveFolderItem f) => visitedFolderIds.add(f.id))
+            .toList();
+        if (currentBatch.isEmpty) break;
+
+        final List<List<DriveFolderItem>> childrenLists = await Future.wait(
+          currentBatch.map(
+            (DriveFolderItem folder) => _fetchItemsInParent(folder.id),
+          ),
+        );
+
+        final List<DriveFolderItem> discovered = <DriveFolderItem>[];
+        final List<DriveFolderItem> nextFolders = <DriveFolderItem>[];
+        for (final List<DriveFolderItem> list in childrenLists) {
+          for (final DriveFolderItem child in list) {
+            discovered.add(child);
+            if (child.isFolder && !visitedFolderIds.contains(child.id)) {
+              nextFolders.add(child);
+            }
+          }
+        }
+        if (discovered.isNotEmpty) {
+          _upsertItemsIntoTabSearchIndex(tabIndex, discovered);
+        }
+        pendingFolders = nextFolders;
+      }
+    } catch (e) {
+      debugPrint('Lỗi đồng bộ ngầm cây thư mục phục vụ tìm kiếm: $e');
     }
   }
 
@@ -1415,6 +1615,9 @@ class GoogleDriveDatasource {
           paperTemplate: template,
         );
         if (isFolderItem) {
+          if (item.id.isNotEmpty) {
+            _folderNameById[item.id] = item.displayName;
+          }
           folders.add(item);
         } else {
           noteFiles.add(item);
@@ -1548,6 +1751,11 @@ class GoogleDriveDatasource {
     activeObservationFolderNotifier.value = null;
     notesFoldersNotifier.value = [];
     observationFoldersNotifier.value = [];
+    allNotesItemsNotifier.value = [];
+    allObservationItemsNotifier.value = [];
+    _folderNameById.clear();
+    notesSearchKeywordNotifier.value = '';
+    observationSearchKeywordNotifier.value = '';
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
